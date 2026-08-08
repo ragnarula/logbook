@@ -99,9 +99,13 @@ so two offline devices never collide.
 **Offline shell.** A service worker stores the application files. The app opens
 without a network. The stored data still comes from IndexedDB.
 
-**Deployment.** A Docker container joins the shared network. Caddy serves it at
-a hostname. The SQLite file lives in a mounted directory, which the existing
-backup job already covers.
+**Deployment.** One Docker container, with the SQLite file on a persistent
+disk. An install script deploys it to Fly.io, which supplies the address, the
+certificate and daily snapshots of the disk. See INSTALL.md.
 
-**Access.** The service has no authentication, which matches the other services
-behind the same proxy.
+**Access.** One passcode protects the whole deployment, and signing in leaves a
+long-lived session on the device. There are no user accounts: one deployment
+serves one household, and a second household runs its own. Authentication never
+blocks recording. A device that cannot sign in still saves events locally and
+sends them once it can, because losing a night of entries to an expired session
+would be worse than the protection is worth.

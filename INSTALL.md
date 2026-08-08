@@ -89,8 +89,38 @@ the snapshot holding it is gone.
 You can also export any project as CSV from the app, under **History → Export
 CSV**, which gives you a copy that does not depend on Fly.
 
-## Without Fly
+## Running it locally
 
-The repository includes a `compose.yml` for running it under Docker Compose
-instead. It expects an external network and a data path, so read it and adjust
-before using it — the Fly path is the one that is tested.
+To work on the code rather than deploy it:
+
+```sh
+pip install -r requirements.txt -r requirements-dev.txt
+DATA_DIR=./data uvicorn main:app --reload --port 8080
+```
+
+Leaving `LOGBOOK_PASSCODE` unset disables sign-in, which is convenient locally
+and unsafe anywhere reachable.
+
+## Tests
+
+```sh
+./run-tests.sh            # everything
+./run-tests.sh --api      # the fast ones
+./run-tests.sh --browser  # drives a real browser
+```
+
+Docker is the only requirement: the tests run in containers, and the app under
+test runs on a throwaway instance with its database in memory, so no real
+deployment is touched.
+
+The API tests cover the sync merge, which is the part that silently corrupts a
+device's data when it is wrong. The browser tests cover whether a person can
+actually use the screen — every case in `tests/browser/run.mjs` is a bug that
+shipped and that the API tests passed straight through, such as an overlay that
+made the whole app untappable.
+
+## Somewhere other than Fly
+
+Nothing ties the app to Fly. It is one container that needs a writable
+directory for the SQLite file, `DATA_DIR` pointing at it, and TLS in front. Any
+host that gives you those will run it, but Fly is the path that is tested.
