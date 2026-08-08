@@ -1,0 +1,47 @@
+# Fly.io deployment.
+#
+# Runs the same image as the homelab compose file. The only differences are
+# where the SQLite file lives and that a passcode is mandatory, because this
+# instance is reachable by anyone.
+#
+#   fly volumes create tracker_data --size 1 --region lhr
+#   fly secrets set TRACKER_PASSCODE='...'
+#   fly deploy
+#
+# Keep the default <app>.fly.dev hostname. A name under on.21cs.biz would be
+# shadowed on the tailnet: dnsmasq answers that whole domain with the homelab
+# address, so your own phones would resolve it to a service that is not there.
+
+app = "egadd-tracker"
+primary_region = "lhr"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  DATA_DIR = "/data"
+
+[[mounts]]
+  source = "tracker_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # The app writes to IndexedDB first and syncs in the background, so a cold
+  # start costs nothing a user can feel. Stopping when idle keeps the bill near
+  # the price of the volume alone.
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/health"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

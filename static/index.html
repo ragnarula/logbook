@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f1115" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Logbook" />
+  <title>Logbook</title>
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/static/icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="/static/icons/icon-192.png" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <button id="project-btn" class="project-btn">
+      <span id="project-name">Tracker</span>
+      <span class="chev" aria-hidden="true">▾</span>
+    </button>
+    <button id="sync-btn" class="sync-btn" title="Sync status">
+      <span id="sync-dot" class="dot"></span>
+      <span id="sync-text" class="sync-text"></span>
+    </button>
+    <button id="history-btn" class="icon-btn" aria-label="History">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+    </button>
+  </header>
+
+  <main id="screen" class="screen"></main>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <div id="sheet-backdrop" class="sheet-backdrop" hidden>
+    <section id="sheet" class="sheet" role="dialog" aria-modal="true"></section>
+  </div>
+
+  <script>
+    // Rescue a device stuck on an old release.
+    //
+    // Navigations are network-first in the service worker, so this file is
+    // always current — but the CSS and JS it pulls in can still come from a
+    // stale cache, and the browser's own HTTP cache sits underneath that. If
+    // one module is old and another is new, the imports between them stop
+    // matching, the whole module graph fails to link, and the page renders as
+    // an empty shell with no way for the user to recover.
+    //
+    // Two triggers, one repair:
+    //   1. a cache from a different release is present;
+    //   2. the app did not finish starting, whatever the reason.
+    //
+    // Only runs online. Offline, a stale cache beats no cache at all.
+    (function () {
+      var VERSION = "__CACHE_VERSION__";
+      var BOOT_GRACE_MS = 6000;
+      var healing = false;
+
+      function heal(reason) {
+        if (healing || !navigator.onLine || !("caches" in window)) return;
+        try {
+          var tries = parseInt(sessionStorage.getItem("tracker-heal-tries") || "0", 10);
+          if (tries >= 3) return;
+          sessionStorage.setItem("tracker-heal-tries", String(tries + 1));
+          sessionStorage.setItem("tracker-healed", reason);
+        } catch (e) {
+          return;
+        }
+        healing = true;
+        caches
+          .keys()
+          .then(function (keys) {
+            return Promise.all(keys.map(function (k) { return caches.delete(k); }));
+          })
+          .then(function () {
+            if (!navigator.serviceWorker) return null;
+            return navigator.serviceWorker.getRegistrations().then(function (regs) {
+              return Promise.all(regs.map(function (r) { return r.unregister(); }));
+            });
+          })
+          .then(function () { location.reload(); })
+          .catch(function () {});
+      }
+
+      if ("caches" in window) {
+        caches.keys().then(function (keys) {
+          for (var i = 0; i < keys.length; i++) {
+            if (keys[i] !== VERSION) return heal("stale-cache");
+          }
+        });
+      }
+
+      // A module that fails to link throws before any of our code runs, so the
+      // only reliable signal is that boot never completed.
+      window.addEventListener("error", function () {
+        if (!window.__trackerBooted) heal("script-error");
+      }, true);
+
+      setTimeout(function () {
+        if (!window.__trackerBooted) heal("no-boot");
+      }, BOOT_GRACE_MS);
+    })();
+  </script>
+
+  <script type="module" src="/static/app.js?v=__CACHE_VERSION__"></script>
+</body>
+</html>
