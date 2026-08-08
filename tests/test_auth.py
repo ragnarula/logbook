@@ -25,10 +25,11 @@ GUARDED = [
 
 def build(tmp_path, monkeypatch, passcode):
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("TRACKER_PASSCODE", raising=False)
     if passcode is None:
-        monkeypatch.delenv("TRACKER_PASSCODE", raising=False)
+        monkeypatch.delenv("LOGBOOK_PASSCODE", raising=False)
     else:
-        monkeypatch.setenv("TRACKER_PASSCODE", passcode)
+        monkeypatch.setenv("LOGBOOK_PASSCODE", passcode)
     import main
 
     importlib.reload(main)
@@ -130,3 +131,17 @@ def test_sessions_never_sync_to_a_device(secured):
         "/api/sync", json={"since": 0, "changes": {"sessions": [{"id": "x", "updated_at": 1}]}}
     )
     assert refused.status_code == 400
+
+
+def test_the_old_variable_name_still_works(tmp_path, monkeypatch):
+    """An existing deployment sets TRACKER_PASSCODE. Renaming must not lock it out."""
+    monkeypatch.delenv("LOGBOOK_PASSCODE", raising=False)
+    main = build(tmp_path, monkeypatch, None)
+    monkeypatch.setenv("TRACKER_PASSCODE", PASSCODE)
+    import importlib
+
+    importlib.reload(main)
+    with TestClient(main.app) as c:
+        assert c.post("/api/sync", json={"since": 0, "changes": {}}).status_code == 401
+        assert c.post("/api/login", json={"passcode": PASSCODE}).status_code == 200
+        assert c.post("/api/sync", json={"since": 0, "changes": {}}).status_code == 200

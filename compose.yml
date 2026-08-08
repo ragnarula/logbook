@@ -5,11 +5,11 @@ services:
     restart: unless-stopped
     environment:
       - DATA_DIR=/data
-      # Set TRACKER_PASSCODE in .env to require a passcode. Leave it empty and
+      # Set LOGBOOK_PASSCODE in .env to require a passcode. Leave it empty and
       # the service stays open, which is correct behind a private network.
       # Changing it does not sign existing devices out; delete rows from the
       # sessions table for that.
-      - TRACKER_PASSCODE=${TRACKER_PASSCODE:-}
+      - LOGBOOK_PASSCODE=${LOGBOOK_PASSCODE:-}
     volumes:
       - ${APPDATA}/tracker:/data
     networks:

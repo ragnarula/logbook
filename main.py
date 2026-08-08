@@ -290,7 +290,11 @@ app = FastAPI(title="tracker")
 # runs behind a private network with nothing in front of it.
 # ---------------------------------------------------------------------------
 
-PASSCODE = os.environ.get("TRACKER_PASSCODE", "").strip()
+# TRACKER_PASSCODE is the original name, still honoured so an existing
+# deployment keeps working without rotating its secret.
+PASSCODE = (
+    os.environ.get("LOGBOOK_PASSCODE") or os.environ.get("TRACKER_PASSCODE") or ""
+).strip()
 COOKIE_NAME = "tracker_session"
 SESSION_DAYS = 365
 # A passcode is short enough to guess, so failed attempts are throttled.

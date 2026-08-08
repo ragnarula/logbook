@@ -1,0 +1,38 @@
+# Template for a Fly deployment. install.sh renders this into fly.toml, which is
+# gitignored because it names one specific deployment.
+#
+#   ./install.sh --app my-logbook --region lhr
+#
+app = "__APP__"
+primary_region = "__REGION__"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  DATA_DIR = "/data"
+
+[[mounts]]
+  source = "__VOLUME__"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # The app writes to IndexedDB first and syncs in the background, so a cold
+  # start costs nothing a user can feel. Stopping when idle keeps the bill near
+  # the price of the volume alone.
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/health"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
