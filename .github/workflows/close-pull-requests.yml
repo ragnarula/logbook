@@ -1,0 +1,32 @@
+# GitHub has no setting to turn pull requests off on a personal repository, so
+# any that arrive are closed with an explanation instead.
+#
+# pull_request_target runs with this repository's token and never checks out
+# the contributor's branch, so no untrusted code runs here.
+name: Close pull requests
+
+on:
+  pull_request_target:
+    types: [opened, reopened]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  close:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Explain and close
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.html_url }}
+        run: |
+          gh pr comment "$PR" --body "Thanks for taking the time to look at this.
+
+          This repository does not accept pull requests. It is a small tool
+          built for one household, and reviewing changes is a commitment I am
+          not making.
+
+          The licence is 0BSD, so please fork it and change whatever you like.
+          No permission or attribution needed."
+          gh pr close "$PR"
