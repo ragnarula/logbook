@@ -1,5 +1,8 @@
 # Logbook
 
+**Track anything that happens over time. One tap to record it. Runs on your own
+Fly.io account for about a pound a month.**
+
 <p align="center">
   <img src="docs/log.png" width="200" alt="The log screen: a running Sleep with a live timer, tiles for Feed, Sleep, Nappy and Bath each showing how long since it last happened, and today's entries below." />
   <img src="docs/history.png" width="200" alt="History: one row per day across 24 hours, with sleeps drawn as bars and feeds and nappies as marks, plus buttons to filter by event type or label." />
@@ -7,17 +10,65 @@
   <img src="docs/entry.png" width="200" alt="Recording something that already finished: the start time is adjusted with buttons that move it in steps, and how long it lasted is chosen from a list." />
 </p>
 
-## Product vision
+## The problem
 
-Logbook records events that happen over time. The user decides what to track.
-The code knows nothing about the subject.
+Tracking when things happen is easy to start and hard to keep up. Recording an
+event has to take less effort than the event itself, or you stop doing it.
 
-The first use is newborn care. A project can hold any kind of event.
+Most apps for this fix the categories you are allowed to use, ask for a form
+every time, and keep your data on their servers for a monthly fee.
 
-Two goals drive every decision:
+## What it does
 
-1. The user logs an event with one tap, on a phone, using one hand.
-2. Reading the data stays as easy as entering it.
+- **You define the events.** Name a thing once and it becomes a tile. No event
+  names appear in the code, so it works the same for feeds and naps, medication,
+  headaches or plant watering.
+- **One tap records an event.** No form and no confirmation. For something with
+  a duration, one tap starts it and the next tap ends it.
+- **Typing is rare.** You type to name a project, an event or a label, and only
+  the first time. Times are set with buttons that move them in steps.
+- **Every action can be undone.**
+- **It works with no signal.** Entries save on the device and sync later.
+- **Reading it back is as quick as writing it.** A timeline per day, a rolling
+  24 hours, totals per day and per hour, and filters built from your own labels.
+
+## Run it yourself
+
+One command deploys it to your own [Fly.io](https://fly.io) account:
+
+```sh
+git clone https://github.com/ragnarula/logbook.git
+cd logbook
+./install.sh
+```
+
+It creates the app, an encrypted disk with daily snapshots and a passcode,
+deploys, checks the passcode is enforced, and prints your URL. Re-run it to
+update, and your data is left alone.
+
+**Cost.** The disk is about $0.15 a month. The machine stops when nobody is
+using it, so you pay for the minutes you use. Fly needs a card on file.
+
+**Your data stays yours.** It is a SQLite file on your disk, in your account,
+and any project exports as CSV from inside the app.
+
+On a phone, open the URL and add it to the Home Screen. It then opens like an
+app and works without a network.
+
+See [INSTALL.md](INSTALL.md) for details, including using your own domain.
+
+## Share it with one key
+
+Set a passcode and give it to whoever needs it. Everyone with the key sees and
+edits the same events. There are no accounts, invitations or permissions to
+configure, because two parents tracking one baby should not have to manage them.
+
+One deployment serves one household. A second household runs its own copy, so
+their data is separate by construction rather than by a rule in a shared
+database.
+
+Signing in lasts, so you do it once per device. It never blocks recording: a
+device that cannot reach the server still saves entries and sends them later.
 
 ## Features
 
@@ -26,9 +77,6 @@ Two goals drive every decision:
 - **Event types.** The user names a type once, then reuses it by tapping a tile.
 - **Two kinds of event.** A moment happens at one time. A span starts, then ends
   later.
-- **One tap entry.** The home screen shows one tile for each event type. One tap
-  logs a moment. One tap starts a span, and the next tap on the same tile ends
-  it. The app asks nothing and shows no form.
 - **Labels.** The user names a label once, then selects it.
 - **Corrections.** The user adjusts times, labels and notes on any entry. To
   change a time, the user taps buttons that move it in fixed steps.
@@ -36,7 +84,6 @@ Two goals drive every decision:
   step. The user sets the start time, then picks how long it lasted. The app
   saves a complete entry, so the user never has to start an event and repair it
   afterwards.
-- **Undo.** Every action offers an undo.
 - **History.** A separate page with three views. **Days** draws one row per day.
   **Last 24 hours** draws one row for the moving window, so a night is not split
   at midnight, and totals each event type below it. **List** shows entries in
@@ -52,7 +99,6 @@ Two goals drive every decision:
 - **Labels on the timeline.** Each bar carries a band of its label colours, so
   the user reads labels off the timeline instead of opening each entry.
 - **Export.** The server returns one project as CSV.
-- **Offline use.** The app works with no network and syncs later.
 - **Install.** The user adds the app to a phone home screen.
 - **Home Screen buttons.** Each event type provides a link. The user adds that
   link to the iPhone Home Screen using the Shortcuts app, then logs the event
@@ -108,7 +154,7 @@ without a network. The stored data still comes from IndexedDB.
 
 **Deployment.** One Docker container, with the SQLite file on a persistent
 disk. An install script deploys it to Fly.io, which supplies the address, the
-certificate and daily snapshots of the disk. See INSTALL.md.
+certificate and daily snapshots of the disk.
 
 **Access.** One passcode protects the whole deployment, and signing in leaves a
 long-lived session on the device. There are no user accounts: one deployment
