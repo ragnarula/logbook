@@ -6,7 +6,10 @@
 
 import { STORES, state, dirtyRows, applyRemote, clearDirty, setCursor, pendingCount, emit } from "./store.js";
 
-const RETRY_MS = 30_000;
+// How often to check for other devices' changes while the app is in use, and
+// the slowest it backs off to when nothing is happening.
+const ACTIVE_MS = 30_000;
+const IDLE_MAX_MS = 15 * 60_000;
 const DEBOUNCE_MS = 500;
 // Guards against a pathological backlog turning one sync into an endless loop.
 const MAX_PAGES = 50;
@@ -35,18 +38,20 @@ function setPhase(phase, error = null) {
 
 export function scheduleSync() {
   status.pending = pendingCount();
+  pollDelay = ACTIVE_MS;
   clearTimeout(debounceTimer);
   debounceTimer = setTimeout(() => sync(), DEBOUNCE_MS);
 }
 
 export async function sync() {
+  // Each of these reports "nothing applied", which lets the caller back off.
   if (inFlight) {
     queued = true;
-    return;
+    return 0;
   }
   if (!navigator.onLine) {
     setPhase("offline");
-    return;
+    return 0;
   }
 
   inFlight = true;
@@ -71,7 +76,7 @@ export async function sync() {
         // The outbox stays exactly as it is. Signing in later pushes it, so a
         // night of entries never depends on a session staying alive.
         setPhase("signed-out");
-        return;
+        return 0;
       }
       if (!res.ok) throw new Error(`sync failed: HTTP ${res.status}`);
       const body = await res.json();
@@ -90,6 +95,7 @@ export async function sync() {
     setPhase("synced");
   } catch (err) {
     setPhase(navigator.onLine ? "error" : "offline", err.message);
+    return applied;
   } finally {
     inFlight = false;
     // Rows arriving from another device change what is on screen.
@@ -126,12 +132,47 @@ export async function sessionState() {
   }
 }
 
+// Polling schedule.
+//
+// A fixed interval kept the server awake around the clock for any tab left
+// open, which on a host that bills for running time is most of the cost — and
+// it drains a phone battery for nothing. The app is offline-first, so a slower
+// check costs only a delay in seeing another device's entries, and the cases
+// where that matters (opening the app, coming back to the tab, logging
+// something) all sync immediately anyway.
+let pollDelay = ACTIVE_MS;
+let pollTimer = null;
+
+function scheduleNext(delay = pollDelay) {
+  clearTimeout(pollTimer);
+  pollTimer = setTimeout(poll, delay);
+}
+
+async function poll() {
+  // A hidden tab with an empty outbox has no reason to wake anything.
+  if (document.hidden && !pendingCount()) {
+    pollDelay = IDLE_MAX_MS;
+    scheduleNext();
+    return;
+  }
+  const applied = await sync();
+  // Something moved, so stay responsive. Otherwise ease off.
+  pollDelay = applied || pendingCount() ? ACTIVE_MS : Math.min(pollDelay * 2, IDLE_MAX_MS);
+  scheduleNext();
+}
+
+/** Sync now and return to the fast cadence. For anything the user just did. */
+export function wake() {
+  pollDelay = ACTIVE_MS;
+  scheduleNext(0);
+}
+
 export function startSync() {
   sync();
-  setInterval(() => sync(), RETRY_MS);
-  window.addEventListener("online", () => sync());
+  scheduleNext();
+  window.addEventListener("online", wake);
   window.addEventListener("offline", () => setPhase("offline"));
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") sync();
+    if (document.visibilityState === "visible") wake();
   });
 }
