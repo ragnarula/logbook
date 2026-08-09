@@ -116,3 +116,10 @@ serves one household, and a second household runs its own. Authentication never
 blocks recording. A device that cannot sign in still saves events locally and
 sends them once it can, because losing a night of entries to an expired session
 would be worse than the protection is worth.
+
+## Licence
+
+[0BSD](LICENSE). Use it for anything, with or without credit.
+
+This repository is not accepting issues or pull requests. Fork it and make it
+yours.
