@@ -1,8 +1,15 @@
-# tracker
+# Logbook
+
+<p align="center">
+  <img src="docs/log.png" width="200" alt="The log screen: a running Sleep with a live timer, tiles for Feed, Sleep, Nappy and Bath each showing how long since it last happened, and today's entries below." />
+  <img src="docs/history.png" width="200" alt="History: one row per day across 24 hours, with sleeps drawn as bars and feeds and nappies as marks, plus buttons to filter by event type or label." />
+  <img src="docs/stats.png" width="200" alt="Stats: totals for the period, a bar per day, and a bar per hour of the day showing when events cluster." />
+  <img src="docs/entry.png" width="200" alt="Recording something that already finished: the start time is adjusted with buttons that move it in steps, and how long it lasted is chosen from a list." />
+</p>
 
 ## Product vision
 
-Tracker records events that happen over time. The user decides what to track.
+Logbook records events that happen over time. The user decides what to track.
 The code knows nothing about the subject.
 
 The first use is newborn care. A project can hold any kind of event.

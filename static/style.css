@@ -499,6 +499,9 @@ ul { list-style: none; margin: 0; padding: 0; }
 }
 .time-input {
   flex: 1;
+  /* Without this the field refuses to shrink below its text width and pushes
+     itself off the edge of the sheet. */
+  min-width: 0;
   min-height: 36px;
   padding: 0 10px;
   border-radius: 10px;
@@ -669,7 +672,8 @@ ul { list-style: none; margin: 0; padding: 0; }
 
 .stat-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  /* Two per row on a phone, so four tiles land as a square rather than 3 + 1. */
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 8px;
   margin-bottom: 4px;
 }

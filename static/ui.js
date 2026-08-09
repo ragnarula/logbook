@@ -60,6 +60,15 @@ function dayLabel(ts) {
 
 const fullTime = (ts) => `${dayLabel(ts)} ${clockTime(ts)}`;
 
+/** Day label for the timeline, where the column is only wide enough for
+ *  "Yesterday". The full form clipped to "Thu, Au..." on a phone. */
+function shortDayLabel(ts) {
+  const midnight = startOfToday();
+  if (ts >= midnight) return "Today";
+  if (ts >= midnight - DAY) return "Yesterday";
+  return new Date(ts).toLocaleDateString(undefined, { weekday: "short", day: "numeric" });
+}
+
 /** Compact elapsed time: "4s", "12m", "2h 14m", "3d 4h". */
 function duration(ms) {
   if (ms < 0) ms = 0;
@@ -1156,7 +1165,7 @@ function buildDays(events, now, dayLimit) {
   const days = new Map();
   const dayFor = (ts) => {
     const { start, end } = dayBounds(ts);
-    if (!days.has(start)) days.set(start, { start, end, label: dayLabel(start), spans: [], ticks: [] });
+    if (!days.has(start)) days.set(start, { start, end, label: shortDayLabel(start), spans: [], ticks: [] });
     return days.get(start);
   };
 
