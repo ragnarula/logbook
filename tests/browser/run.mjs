@@ -266,6 +266,37 @@ test("a tap records the amount set up on the type, and the bar corrects it", asy
   eq(errors, [], "javascript errors");
 });
 
+test("turning a span type into a moment does not strand a running span", async (browser, cookie) => {
+  await sync(BASE, cookie, project("p-kind", {
+    types: [{ id: "t-kind", name: "Nap", kind: "span" }],
+    events: [{ id: "e-kind-open", type: "t-kind", start: Date.now() - 3600_000, end: null }],
+  }));
+  const { page, errors } = await openApp(browser, BASE, { passcode: PASSCODE, select: "p-kind" });
+  eq((await screenState(page)).running, ["Nap"], "a span should be running to begin with");
+
+  await page.click(".tile-wrap:has(.tile[data-id='t-kind']) .tile-more");
+  await wait(700);
+  await clickText(page, "edit event");
+  await page.click("[data-kind-value='point']");
+  await wait(300);
+  await clickText(page, "save");
+  await wait(2000);
+
+  const stored = (await sync(BASE, cookie)).changes.event_types.find((t) => t.id === "t-kind");
+  eq(stored.kind, "point", "the new kind was not saved");
+
+  // A moment tile cannot end a span, so leaving one open would strand it: it
+  // would run for ever while taps recorded new entries beside it.
+  eq((await screenState(page)).running, [], "a span is still running after the type became a moment");
+  const open = (await liveEvents(BASE, cookie)).filter((e) => e.type_id === "t-kind" && e.ended_at === null);
+  eq(open.length, 0, "open spans left behind");
+
+  await page.click(".tile[data-id='t-kind']");
+  await wait(1500);
+  eq((await screenState(page)).running, [], "tapping the tile started a span on a moment type");
+  eq(errors, [], "javascript errors");
+});
+
 // ---------------------------------------------------------------------------
 
 const browser = await puppeteer.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"] });

@@ -1123,10 +1123,25 @@ export function openTypeSheet(type) {
         draft.unit = unitEl.value.trim();
         closeSheet();
         if (editing) {
+          const becameMoment = type.kind === "span" && draft.kind === "point";
           await S.put("event_types", {
             id: type.id, name, kind: draft.kind, icon: draft.icon, color: draft.color,
             unit: draft.unit, step: draft.step, default_quantity: draft.defaultQuantity,
           });
+          // A moment tile cannot end a span, so any span still running would be
+          // stranded: it would run for ever, and tapping the tile would record
+          // a new entry beside it. Close them at now, which keeps the time
+          // already recorded rather than discarding it.
+          if (becameMoment) {
+            const running = S.openSpans(type.project_id).filter((e) => e.type_id === type.id);
+            for (const event of running) await S.endEvent(event);
+            if (running.length) {
+              toast(
+                `${esc(name)} is now a moment · ${running.length} running ` +
+                  `${running.length === 1 ? "entry" : "entries"} ended`
+              );
+            }
+          }
         } else {
           await S.createType(project.id, { name, ...draft });
         }
