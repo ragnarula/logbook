@@ -297,6 +297,26 @@ test("turning a span type into a moment does not strand a running span", async (
   eq(errors, [], "javascript errors");
 });
 
+test("an event left open by a stale device is repaired, not shown as running", async (browser, cookie) => {
+  // Exactly what a device with an out-of-date copy of the type produces: an
+  // open event belonging to a type that is a moment.
+  await sync(BASE, cookie, project("p-stale", {
+    types: [{ id: "t-stale", name: "Pump", kind: "point" }],
+    events: [{ id: "e-stale-open", type: "t-stale", start: Date.now() - 5400_000, end: null }],
+  }));
+
+  const { page, errors } = await openApp(browser, BASE, { passcode: PASSCODE, select: "p-stale" });
+  await wait(3000); // the repair is a local write, then a sync pushes it
+
+  // Left alone it would sit in the running strip for ever, and ending it would
+  // invent a 90 minute span on a type that cannot have one.
+  eq((await screenState(page)).running, [], "an open event on a moment type is still shown as running");
+
+  const repaired = (await liveEvents(BASE, cookie)).find((e) => e.id === "e-stale-open");
+  eq(repaired.ended_at, repaired.started_at, "the event was not closed at its own start");
+  eq(errors, [], "javascript errors");
+});
+
 // ---------------------------------------------------------------------------
 
 const browser = await puppeteer.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"] });

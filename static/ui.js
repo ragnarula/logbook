@@ -493,9 +493,11 @@ export async function runPendingAction() {
   const { end, typeId } = pendingAction;
   pendingAction = null;
 
-  // A device opening this link for the first time has an empty local database,
-  // so the target may still be on its way down.
-  sync();
+  // Wait for a sync before acting. This device may hold an old copy of the
+  // type — a link is often the first thing a phone does after hours asleep —
+  // and recording a span because the type used to be one is worse than a short
+  // delay. Offline, the sync fails quickly and the local copy is used.
+  await sync();
 
   if (end) {
     const event = await waitForRow(() => S.state.events.get(end));

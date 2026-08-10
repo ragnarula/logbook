@@ -2,7 +2,7 @@
 // background. Nothing on the startup path touches the network, so the app is
 // usable the moment the local database has loaded.
 
-import { load, subscribe, state, STORES } from "./store.js";
+import { load, repairOpenMoments, subscribe, state, STORES } from "./store.js";
 import { startSync, onStatus, sessionState } from "./sync.js";
 import {
   captureDeepLink,
@@ -18,6 +18,7 @@ const hasLocalData = () => STORES.some((name) => state[name].size > 0);
 
 async function main() {
   await load();
+  await repairOpenMoments();
   wire();
   render();
 

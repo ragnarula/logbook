@@ -308,6 +308,28 @@ export function openSpans(projectId) {
     .sort((a, b) => a.started_at - b.started_at);
 }
 
+/**
+ * Close events that are open but belong to a moment type.
+ *
+ * A moment cannot be in progress, so such a row is always a mistake — it comes
+ * from a device that still had the type as a span when it recorded the event.
+ * Left alone it shows as running for ever, and ending it by hand turns it into
+ * a span, which is how a converted type appears not to have converted.
+ *
+ * They are closed at their own start, which is what a moment is, rather than at
+ * now, which would invent a duration that never happened.
+ */
+export async function repairOpenMoments() {
+  const broken = [];
+  for (const event of state.events.values()) {
+    if (event.deleted || event.ended_at !== null) continue;
+    const type = state.event_types.get(event.type_id);
+    if (type && !type.deleted && type.kind !== "span") broken.push(event);
+  }
+  for (const event of broken) await put("events", { id: event.id, ended_at: event.started_at });
+  return broken.length;
+}
+
 export function lastEventOfType(typeId) {
   let best = null;
   for (const e of state.events.values()) {

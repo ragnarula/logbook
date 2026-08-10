@@ -4,7 +4,7 @@
 // everything changed since our cursor. Nothing here blocks the UI — a failed
 // sync just leaves the outbox intact for the next attempt.
 
-import { STORES, state, dirtyRows, applyRemote, clearDirty, setCursor, pendingCount, emit } from "./store.js";
+import { STORES, state, dirtyRows, applyRemote, clearDirty, setCursor, pendingCount, emit, repairOpenMoments } from "./store.js";
 
 // How often to check for other devices' changes while the app is in use, and
 // the slowest it backs off to when nothing is happening.
@@ -98,8 +98,19 @@ export async function sync() {
     return applied;
   } finally {
     inFlight = false;
-    // Rows arriving from another device change what is on screen.
-    if (applied) emit();
+    // Rows arriving from another device change what is on screen. A type may
+    // have become a moment elsewhere, which can orphan an open event here.
+    if (applied) {
+      emit();
+      // A repair is a local write like any other, so it has to be pushed or it
+      // stays on this device and every other one keeps showing it as running.
+      repairOpenMoments().then((fixed) => {
+        if (fixed) {
+          emit();
+          scheduleSync();
+        }
+      });
+    }
     if (queued) {
       queued = false;
       setTimeout(() => sync(), 0);
