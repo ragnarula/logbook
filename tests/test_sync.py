@@ -205,3 +205,57 @@ def test_health_reports_counts(client):
     assert body["ok"] is True
     assert body["counts"]["projects"] == 1
     assert body["seq"] >= 1
+
+
+def test_quantity_round_trips_as_a_decimal(client):
+    push(client, event_types=[
+        {"id": "t1", "project_id": "p1", "name": "Bottle", "kind": "point",
+         "unit": "ml", "step": 10, "default_quantity": 120, "updated_at": 1},
+    ], events=[
+        {"id": "e1", "project_id": "p1", "type_id": "t1", "started_at": 1,
+         "quantity": 4.2, "updated_at": 1},
+        {"id": "e2", "project_id": "p1", "type_id": "t1", "started_at": 2, "updated_at": 1},
+    ])
+    body = push(client, since=0)
+    t = body["changes"]["event_types"][0]
+    assert (t["unit"], t["step"], t["default_quantity"]) == ("ml", 10.0, 120.0)
+
+    events = {e["id"]: e["quantity"] for e in body["changes"]["events"]}
+    assert events["e1"] == 4.2, "a decimal amount was rounded away"
+    assert events["e2"] is None, "an event with no amount should stay empty"
+
+
+def test_a_database_from_before_quantity_gains_the_columns(tmp_path, monkeypatch):
+    """The live database predates these columns. Starting must add them, not fail."""
+    import sqlite3
+    import main
+
+    db_path = tmp_path / "tracker.db"
+    old = sqlite3.connect(db_path)
+    old.executescript(
+        """
+        CREATE TABLE event_types (id TEXT PRIMARY KEY, project_id TEXT, name TEXT,
+            kind TEXT, icon TEXT, color TEXT, position INTEGER, archived INTEGER,
+            deleted INTEGER, updated_at INTEGER, seq INTEGER);
+        CREATE TABLE events (id TEXT PRIMARY KEY, project_id TEXT, type_id TEXT,
+            started_at INTEGER, ended_at INTEGER, label_ids TEXT, note TEXT,
+            deleted INTEGER, updated_at INTEGER, seq INTEGER);
+        CREATE TABLE meta (key TEXT PRIMARY KEY, value INTEGER);
+        INSERT INTO event_types VALUES ('t1','p1','Feed','point','','#fff',0,0,0,1,1);
+        INSERT INTO events VALUES ('e1','p1','t1',1000,1000,'[]','',0,1,2);
+        INSERT INTO meta VALUES ('seq', 2);
+        """
+    )
+    old.commit()
+    old.close()
+
+    conn = main.connect(db_path)
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(events)")}
+    assert "quantity" in columns
+    type_columns = {r[1] for r in conn.execute("PRAGMA table_info(event_types)")}
+    assert {"unit", "step", "default_quantity"} <= type_columns
+
+    # The rows that were already there survive, with empty amounts.
+    row = conn.execute("SELECT * FROM events WHERE id = 'e1'").fetchone()
+    assert row["quantity"] is None
+    assert conn.execute("SELECT COUNT(*) FROM event_types").fetchone()[0] == 1

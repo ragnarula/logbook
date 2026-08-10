@@ -217,6 +217,55 @@ test("sign-in holds a Home Screen link rather than dropping it", async (browser,
   eq(errors, [], "javascript errors");
 });
 
+test("a tap records the amount set up on the type, and the bar corrects it", async (browser, cookie) => {
+  await sync(BASE, cookie, {
+    ...project("p-qty"),
+    event_types: [{
+      id: "t-qty", project_id: "p-qty", name: "Bottle", kind: "point", icon: "B",
+      color: "#f87171", position: 0, unit: "ml", step: 10, default_quantity: 120,
+      archived: 0, deleted: 0, updated_at: 1,
+    }],
+  });
+  const { page, errors } = await openApp(browser, BASE, { passcode: PASSCODE, select: "p-qty" });
+
+  // The tile says what a tap will record, so it is not a surprise.
+  const tile = await page.$eval(".tile[data-id='t-qty']", (el) => el.textContent);
+  ok(tile.includes("120ml"), `the tile does not show the amount: ${tile}`);
+
+  await page.click(".tile[data-id='t-qty']");
+  await wait(1500);
+  const logged = (await liveEvents(BASE, cookie)).find((e) => e.type_id === "t-qty");
+  eq(logged.quantity, 120, "amount recorded by one tap");
+
+  // Two taps on plus, one on minus: 120 + 10 + 10 - 10 = 130.
+  const plus = await page.evaluateHandle(() =>
+    [...document.querySelectorAll("#toast [data-toast]")].find((b) => b.textContent.trim() === "+"));
+  const minus = await page.evaluateHandle(() =>
+    [...document.querySelectorAll("#toast [data-toast]")].find((b) => b.textContent.trim() === "\u2212"));
+  ok(plus.asElement() && minus.asElement(), "the undo bar has no stepper");
+  await plus.asElement().click(); await wait(300);
+  await plus.asElement().click(); await wait(300);
+  await minus.asElement().click(); await wait(1500);
+
+  eq((await liveEvents(BASE, cookie)).find((e) => e.id === logged.id).quantity, 130, "amount after stepping");
+  // Stepping must not dismiss the bar, or a second correction is impossible.
+  ok(await page.evaluate(() => !document.getElementById("toast").hidden), "the bar closed while stepping");
+
+  // Stats gain an Amount metric, driven by the same filters.
+  await page.click("#history-btn");
+  await wait(1000);
+  await page.click("[data-view='stats']");
+  await wait(1200);
+  const metrics = await page.$$eval("[data-metric]", (els) => els.map((e) => e.textContent.trim()));
+  ok(metrics.includes("Amount"), `no Amount metric offered: ${JSON.stringify(metrics)}`);
+  await page.click("[data-metric='amount']");
+  await wait(1000);
+  const tiles = await page.$$eval(".stat", (els) => els.map((e) => e.textContent.trim().replace(/\s+/g, " ")));
+  ok(tiles.some((t) => t.includes("130ml")), `stats do not total the amount: ${JSON.stringify(tiles)}`);
+
+  eq(errors, [], "javascript errors");
+});
+
 // ---------------------------------------------------------------------------
 
 const browser = await puppeteer.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"] });

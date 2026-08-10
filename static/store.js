@@ -203,7 +203,7 @@ export function createProject(name) {
   });
 }
 
-export function createType(projectId, { name, kind, icon, color }) {
+export function createType(projectId, { name, kind, icon, color, unit = "", step = 1, defaultQuantity = 0 }) {
   const positions = typesFor(projectId).map((t) => t.position || 0);
   return put("event_types", {
     id: uid(),
@@ -213,6 +213,11 @@ export function createType(projectId, { name, kind, icon, color }) {
     icon: icon || "",
     color: color || PALETTE[0],
     position: positions.length ? Math.max(...positions) + 1 : 0,
+    // An empty unit means this type carries no amount, so nothing about the
+    // existing types changes.
+    unit: unit.trim(),
+    step: Number(step) || 1,
+    default_quantity: Number(defaultQuantity) || 0,
     archived: 0,
     deleted: 0,
   });
@@ -229,7 +234,7 @@ export function createLabel(projectId, name, color) {
   });
 }
 
-export function createEvent(projectId, type, { startedAt, labelIds = [], note = "" } = {}) {
+export function createEvent(projectId, type, { startedAt, labelIds = [], note = "", quantity } = {}) {
   const start = startedAt ?? Date.now();
   return put("events", {
     id: uid(),
@@ -240,8 +245,18 @@ export function createEvent(projectId, type, { startedAt, labelIds = [], note = 
     ended_at: type.kind === "span" ? null : start,
     label_ids: JSON.stringify(labelIds),
     note,
+    // The amount a tap records comes from the type's setup, so a tap always
+    // records the same thing.
+    quantity: quantity ?? (type.unit ? Number(type.default_quantity) || 0 : null),
     deleted: 0,
   });
+}
+
+/** Format an amount for display, hiding a pointless trailing zero. */
+export function amountText(type, value) {
+  if (!type?.unit || value === null || value === undefined) return "";
+  const rounded = Math.round(value * 100) / 100;
+  return `${rounded}${type.unit}`;
 }
 
 export function endEvent(event, endedAt) {

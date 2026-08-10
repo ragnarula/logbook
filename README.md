@@ -26,7 +26,10 @@ every time, and keep your data on their servers for a monthly fee.
 - **One tap records an event.** No form and no confirmation. For something with
   a duration, one tap starts it and the next tap ends it.
 - **Typing is rare.** You type to name a project, an event or a label, and only
-  the first time. Times are set with buttons that move them in steps.
+  the first time. Times and amounts are set with buttons that move them in steps.
+- **Amounts, when you need them.** Give an event a unit and a usual amount, and
+  a tap records that. Correct it with the plus and minus buttons on the bar that
+  appears, without opening anything.
 - **Every action can be undone.**
 - **It works with no signal.** Entries save on the device and sync later.
 - **Reading it back is as quick as writing it.** A timeline per day, a rolling
@@ -78,6 +81,10 @@ device that cannot reach the server still saves entries and sends them later.
 - **Two kinds of event.** A moment happens at one time. A span starts, then ends
   later.
 - **Labels.** The user names a label once, then selects it.
+- **Amounts.** An event type can carry a unit, a step size and the amount a tap
+  records, for example 120ml of milk. Events without a unit are unaffected. The
+  stats gain an Amount metric next to Count and Time, so millilitres per day and
+  per hour come from the same filters.
 - **Corrections.** The user adjusts times, labels and notes on any entry. To
   change a time, the user taps buttons that move it in fixed steps.
 - **Past entries.** The user records something that already finished in one

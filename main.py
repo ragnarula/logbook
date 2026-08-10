@@ -50,12 +50,13 @@ TABLES = {
     "projects": ["id", "name", "color", "archived", "deleted", "updated_at"],
     "event_types": [
         "id", "project_id", "name", "kind", "icon", "color",
-        "position", "archived", "deleted", "updated_at",
+        "position", "unit", "step", "default_quantity",
+        "archived", "deleted", "updated_at",
     ],
     "labels": ["id", "project_id", "name", "color", "archived", "deleted", "updated_at"],
     "events": [
         "id", "project_id", "type_id", "started_at", "ended_at",
-        "label_ids", "note", "deleted", "updated_at",
+        "label_ids", "note", "quantity", "deleted", "updated_at",
     ],
 }
 
@@ -68,6 +69,9 @@ TEXT_COLS = {
 }
 INT_COLS = {"archived", "deleted", "position", "updated_at", "started_at"}
 NULLABLE_INT_COLS = {"ended_at"}
+# Amounts are decimal: 4.2 kg would not survive the integer path.
+FLOAT_COLS = {"step", "default_quantity"}
+NULLABLE_FLOAT_COLS = {"quantity"}
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS projects (
@@ -88,6 +92,9 @@ CREATE TABLE IF NOT EXISTS event_types (
     icon        TEXT NOT NULL DEFAULT '',
     color       TEXT NOT NULL DEFAULT '',
     position    INTEGER NOT NULL DEFAULT 0,
+    unit             TEXT NOT NULL DEFAULT '',
+    step             REAL NOT NULL DEFAULT 1,
+    default_quantity REAL NOT NULL DEFAULT 0,
     archived    INTEGER NOT NULL DEFAULT 0,
     deleted     INTEGER NOT NULL DEFAULT 0,
     updated_at  INTEGER NOT NULL DEFAULT 0,
@@ -113,6 +120,7 @@ CREATE TABLE IF NOT EXISTS events (
     ended_at    INTEGER,
     label_ids   TEXT NOT NULL DEFAULT '[]',
     note        TEXT NOT NULL DEFAULT '',
+    quantity    REAL,
     deleted     INTEGER NOT NULL DEFAULT 0,
     updated_at  INTEGER NOT NULL DEFAULT 0,
     seq         INTEGER NOT NULL DEFAULT 0
@@ -152,7 +160,37 @@ def connect(path: Path | str = None) -> sqlite3.Connection:
     conn.executescript(SCHEMA_SQL)
     conn.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('seq', 0)")
     conn.commit()
+    added = migrate(conn)
+    if added:
+        print(f"migrated: added {', '.join(added)}", flush=True)
     return conn
+
+
+# Columns added after the first release. CREATE TABLE IF NOT EXISTS leaves an
+# existing database untouched, so without this a deployment carrying real data
+# would start and then fail on the first query naming a new column.
+LATER_COLUMNS = {
+    "event_types": [
+        ("unit", "TEXT NOT NULL DEFAULT ''"),
+        ("step", "REAL NOT NULL DEFAULT 1"),
+        ("default_quantity", "REAL NOT NULL DEFAULT 0"),
+    ],
+    "events": [("quantity", "REAL")],
+}
+
+
+def migrate(conn: sqlite3.Connection) -> list[str]:
+    """Add any missing columns. Returns what it added, for the logs."""
+    added = []
+    for table, columns in LATER_COLUMNS.items():
+        have = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for name, declaration in columns:
+            if name not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
+                added.append(f"{table}.{name}")
+    if added:
+        conn.commit()
+    return added
 
 
 def db() -> sqlite3.Connection:
@@ -204,6 +242,19 @@ def coerce(table: str, raw: dict) -> dict | None:
                     out[col] = int(val)
                 except (TypeError, ValueError):
                     out[col] = None
+        elif col in NULLABLE_FLOAT_COLS:
+            if val is None or val == "":
+                out[col] = None
+            else:
+                try:
+                    out[col] = float(val)
+                except (TypeError, ValueError):
+                    out[col] = None
+        elif col in FLOAT_COLS:
+            try:
+                out[col] = float(val)
+            except (TypeError, ValueError):
+                out[col] = 0.0
         elif col in INT_COLS:
             try:
                 out[col] = int(val)
@@ -548,9 +599,9 @@ def export_csv(project: str, _: None = Depends(require_auth)):
         if proj is None:
             raise HTTPException(status_code=404, detail="No such project")
         types = {
-            r["id"]: r["name"]
+            r["id"]: (r["name"], r["unit"])
             for r in conn.execute(
-                "SELECT id, name FROM event_types WHERE project_id = ?", (project,)
+                "SELECT id, name, unit FROM event_types WHERE project_id = ?", (project,)
             )
         }
         labels = {
@@ -568,7 +619,8 @@ def export_csv(project: str, _: None = Depends(require_auth)):
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(
-        ["id", "event", "started_at", "ended_at", "duration_seconds", "labels", "note"]
+        ["id", "event", "started_at", "ended_at", "duration_seconds",
+         "quantity", "unit", "labels", "note"]
     )
     for ev in events:
         try:
@@ -580,13 +632,16 @@ def export_csv(project: str, _: None = Depends(require_auth)):
         duration = ""
         if ev["ended_at"] is not None:
             duration = str(round((ev["ended_at"] - ev["started_at"]) / 1000))
+        name, unit = types.get(ev["type_id"], (ev["type_id"], ""))
         writer.writerow(
             [
                 ev["id"],
-                types.get(ev["type_id"], ev["type_id"]),
+                name,
                 iso(ev["started_at"]),
                 iso(ev["ended_at"]),
                 duration,
+                "" if ev["quantity"] is None else ev["quantity"],
+                unit,
                 "; ".join(label_names),
                 ev["note"],
             ]

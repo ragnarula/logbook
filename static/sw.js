@@ -6,7 +6,7 @@
 // the cache must never decide which version of the code runs.
 
 // Bump on every shipped change to the static assets.
-const VERSION = "tracker-v18";
+const VERSION = "tracker-v19";
 
 // How long to wait for the network before falling back to cache. Long enough
 // that a normal connection always wins, short enough that a dead one does not

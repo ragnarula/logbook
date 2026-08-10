@@ -121,11 +121,24 @@ function hideToast() {
   toastActions = [];
 }
 
+/** Replace the toast's text without disturbing its buttons. */
+export function setToastMessage(html) {
+  const msg = toastEl.querySelector(".toast-msg");
+  if (msg) msg.innerHTML = html;
+}
+
 toastEl.addEventListener("click", (ev) => {
   const btn = ev.target.closest("[data-toast]");
   if (!btn) return;
   const action = toastActions[Number(btn.dataset.toast)];
-  hideToast();
+  // A stepper has to survive being pressed repeatedly, so it does not dismiss
+  // the bar and it restarts the countdown.
+  if (action?.keepOpen) {
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(hideToast, 8000);
+  } else {
+    hideToast();
+  }
   action?.onClick?.();
 });
 
@@ -277,7 +290,13 @@ function tileHtml(type) {
         <span class="tile-icon">${esc(type.icon) || "•"}</span>
         <span class="tile-name">${esc(type.name)}</span>
         <span class="tile-ago" ${last ? `data-ago="${last.started_at}"` : ""}>${last ? "" : "never"}</span>
-        ${type.kind === "span" ? `<span class="tile-kind">${running ? "tap to end" : "span"}</span>` : ""}
+        ${
+          type.unit
+            ? `<span class="tile-kind">${esc(S.amountText(type, Number(type.default_quantity) || 0))}</span>`
+            : type.kind === "span"
+              ? `<span class="tile-kind">${running ? "tap to end" : "span"}</span>`
+              : ""
+        }
       </button>
       <button class="tile-more" data-action="tile-detail" data-id="${type.id}"
               aria-label="Options for ${esc(type.name)}">⋯</button>
@@ -318,6 +337,8 @@ function entryHtml(event) {
   else if (type?.kind === "span" && event.ended_at > event.started_at) {
     sub += `–${clockTime(event.ended_at)} · ${duration(event.ended_at - event.started_at)}`;
   }
+  const amount = S.amountText(type, event.quantity);
+  if (amount) sub += ` · ${amount}`;
   return `
     <li class="entry" data-action="entry" data-id="${event.id}">
       <span class="entry-icon" style="--tile:${esc(type?.color || "#8b91a1")}">${esc(type?.icon) || "•"}</span>
@@ -374,10 +395,41 @@ async function quickLog(type) {
   const event = await S.createEvent(project.id, type);
   scheduleSync();
   const verb = type.kind === "span" ? "started" : "logged";
-  toast(`${esc(type.icon)} ${esc(type.name)} ${verb} ${esc(clockTime(event.started_at))}`, [
-    { label: "Undo", onClick: () => S.softDelete("events", event.id).then(scheduleSync) },
-    { label: "Details", primary: true, onClick: () => openEventSheet(S.state.events.get(event.id)) },
-  ]);
+  const said = `${esc(type.icon)} ${esc(type.name)} ${verb} ${esc(clockTime(event.started_at))}`;
+  toast(loggedMessage(type, event, said), amountActions(type, event, said));
+}
+
+/** The toast text, with the amount when the type carries one. */
+function loggedMessage(type, event, said) {
+  const stored = S.state.events.get(event.id);
+  const amount = S.amountText(type, stored?.quantity);
+  return amount ? `${said} · <strong>${esc(amount)}</strong>` : said;
+}
+
+/**
+ * Undo, plus a stepper when the type carries an amount.
+ *
+ * Correcting the amount stays one tap and never opens a sheet, which is what
+ * lets a tap still be the whole interaction.
+ */
+function amountActions(type, event, said) {
+  const undo = { label: "Undo", onClick: () => S.softDelete("events", event.id).then(scheduleSync) };
+  if (!type.unit) {
+    return [undo, { label: "Details", primary: true, onClick: () => openEventSheet(S.state.events.get(event.id)) }];
+  }
+  const step = Number(type.step) || 1;
+  const adjust = (delta) => async () => {
+    const current = S.state.events.get(event.id);
+    if (!current || current.deleted) return;
+    await S.put("events", { id: event.id, quantity: Math.max(0, (current.quantity || 0) + delta) });
+    scheduleSync();
+    setToastMessage(loggedMessage(type, event, said));
+  };
+  return [
+    { label: "−", keepOpen: true, onClick: adjust(-step) },
+    { label: "+", keepOpen: true, onClick: adjust(step) },
+    undo,
+  ];
 }
 
 async function endSpan(event) {
@@ -735,6 +787,7 @@ export function openEventSheet(event) {
     started_at: event.started_at,
     ended_at: event.ended_at,
     labels: new Set(S.labelIdsOf(event)),
+    quantity: event.quantity,
   };
 
   const endBlock = !isSpan
@@ -766,6 +819,21 @@ export function openEventSheet(event) {
         </div>
       </div>
 
+      ${
+        type?.unit
+          ? `<div class="time-row">
+               <div class="time-label">Amount</div>
+               <div class="time-value" data-amount-value></div>
+               <div class="time-controls amount-controls">
+                 <button class="step" data-adjust="${-10 * (Number(type.step) || 1)}">−${10 * (Number(type.step) || 1)}</button>
+                 <button class="step" data-adjust="${-(Number(type.step) || 1)}">−${Number(type.step) || 1}</button>
+                 <button class="step" data-adjust="${Number(type.step) || 1}">+${Number(type.step) || 1}</button>
+                 <button class="step" data-adjust="${10 * (Number(type.step) || 1)}">+${10 * (Number(type.step) || 1)}</button>
+               </div>
+             </div>`
+          : ""
+      }
+
       <div class="section">
         <div class="section-head"><h3>Note</h3></div>
         <textarea class="note" data-note placeholder="Optional">${esc(event.note || "")}</textarea>
@@ -783,7 +851,12 @@ export function openEventSheet(event) {
     const formEl = panel.querySelector("[data-new-label]");
     const nameEl = panel.querySelector("[data-label-name]");
 
+    const refreshAmount = () => {
+      const el = panel.querySelector("[data-amount-value]");
+      if (el) el.textContent = S.amountText(type, draft.quantity ?? 0);
+    };
     const refreshTimes = () => {
+      refreshAmount();
       for (const el of panel.querySelectorAll("[data-time]")) {
         const field = el.dataset.time;
         if (draft[field] != null) el.textContent = fullTime(draft[field]);
@@ -806,6 +879,12 @@ export function openEventSheet(event) {
     refreshLabels();
 
     panel.addEventListener("click", async (ev) => {
+      const adjust = ev.target.closest("[data-adjust]");
+      if (adjust) {
+        draft.quantity = Math.max(0, (draft.quantity || 0) + Number(adjust.dataset.adjust));
+        refreshAmount();
+        return;
+      }
       const shift = ev.target.closest("[data-shift]");
       if (shift) {
         const [field, mins] = shift.dataset.shift.split(":");
@@ -901,6 +980,7 @@ export function openEventSheet(event) {
         ended_at: ended,
         label_ids: JSON.stringify([...draft.labels]),
         note,
+        quantity: draft.quantity,
       });
       scheduleSync();
     }
@@ -918,6 +998,9 @@ export function openTypeSheet(type) {
     kind: type?.kind || "point",
     icon: type?.icon || EMOJI[0],
     color: type?.color || S.PALETTE[S.typesFor(project.id).length % S.PALETTE.length],
+    unit: type?.unit || "",
+    step: Number(type?.step) || 1,
+    defaultQuantity: Number(type?.default_quantity) || 0,
   };
 
   const html = `
@@ -956,6 +1039,29 @@ export function openTypeSheet(type) {
         </div>
       </div>
 
+      <div class="section">
+        <div class="section-head"><h3>Amount</h3></div>
+        <p class="note-text">Leave the unit empty if this event has no amount.</p>
+        <input class="text-input" data-unit placeholder="Unit, for example ml or kg"
+               value="${esc(draft.unit)}" autocomplete="off" />
+        <div class="amount-setup" data-amount-setup ${draft.unit ? "" : "hidden"}>
+          <div class="section-head"><h3>Steps of</h3></div>
+          <div class="chips">
+            ${[1, 5, 10, 25, 50].map(
+              (v) => `<button class="chip" data-step="${v}">${v}</button>`
+            ).join("")}
+          </div>
+          <div class="section-head"><h3>A tap records</h3></div>
+          <div class="time-controls amount-controls">
+            <button class="step" data-amount="-10">−10</button>
+            <button class="step" data-amount="-1">−1</button>
+            <div class="time-value" data-default-amount></div>
+            <button class="step" data-amount="1">+1</button>
+            <button class="step" data-amount="10">+10</button>
+          </div>
+        </div>
+      </div>
+
       <div class="sheet-actions">
         ${editing ? `<button class="btn danger" data-action="delete-type">Remove</button>` : ""}
         <button class="btn primary big" data-action="save-type">${editing ? "Save" : "Create"}</button>
@@ -964,9 +1070,35 @@ export function openTypeSheet(type) {
 
   openSheet(html, (panel) => {
     const nameEl = panel.querySelector("[data-name]");
+    const unitEl = panel.querySelector("[data-unit]");
+    const setupEl = panel.querySelector("[data-amount-setup]");
     if (!editing) setTimeout(() => nameEl.focus(), 60);
 
+    const refreshAmount = () => {
+      draft.unit = unitEl.value.trim();
+      setupEl.hidden = !draft.unit;
+      panel.querySelector("[data-default-amount]").textContent =
+        `${Math.round(draft.defaultQuantity * 100) / 100}${draft.unit}`;
+      for (const chip of panel.querySelectorAll("[data-step]")) {
+        chip.classList.toggle("on", Number(chip.dataset.step) === draft.step);
+      }
+    };
+    refreshAmount();
+    unitEl.addEventListener("input", refreshAmount);
+
     panel.addEventListener("click", async (ev) => {
+      const stepChip = ev.target.closest("[data-step]");
+      if (stepChip) {
+        draft.step = Number(stepChip.dataset.step);
+        refreshAmount();
+        return;
+      }
+      const amountBtn = ev.target.closest("[data-amount]");
+      if (amountBtn) {
+        draft.defaultQuantity = Math.max(0, draft.defaultQuantity + Number(amountBtn.dataset.amount));
+        refreshAmount();
+        return;
+      }
       const kind = ev.target.closest("[data-kind-value]");
       if (kind) {
         draft.kind = kind.dataset.kindValue;
@@ -988,9 +1120,13 @@ export function openTypeSheet(type) {
       if (ev.target.closest("[data-action='save-type']")) {
         const name = nameEl.value.trim();
         if (!name) return nameEl.focus();
+        draft.unit = unitEl.value.trim();
         closeSheet();
         if (editing) {
-          await S.put("event_types", { id: type.id, name, ...draft });
+          await S.put("event_types", {
+            id: type.id, name, kind: draft.kind, icon: draft.icon, color: draft.color,
+            unit: draft.unit, step: draft.step, default_quantity: draft.defaultQuantity,
+          });
         } else {
           await S.createType(project.id, { name, ...draft });
         }
@@ -1355,13 +1491,15 @@ function periodBounds(events, now) {
  */
 function computeStats(events, from, to, now) {
   const days = new Map();
-  const hours = Array.from({ length: 24 }, () => ({ count: 0, ms: 0 }));
+  const hours = Array.from({ length: 24 }, () => ({ count: 0, ms: 0, qty: 0 }));
   const byType = new Map();
   const byLabel = new Map();
   let total = 0;
   let totalMs = 0;
+  let totalQty = 0;
+  let unit = "";
 
-  for (let d = from; d < to; d = dayBounds(d).end) days.set(d, { count: 0, ms: 0 });
+  for (let d = from; d < to; d = dayBounds(d).end) days.set(d, { count: 0, ms: 0, qty: 0 });
 
   const addMs = (bucketStart, ms) => {
     const bucket = days.get(bucketStart);
@@ -1378,17 +1516,28 @@ function computeStats(events, from, to, now) {
     if (days.has(startDay)) days.get(startDay).count += 1;
     hours[new Date(event.started_at).getHours()].count += 1;
 
+    // An amount belongs to the moment it was recorded, not spread over a span.
+    const qty = Number(event.quantity) || 0;
+    if (qty) {
+      totalQty += qty;
+      if (days.has(startDay)) days.get(startDay).qty += qty;
+      hours[new Date(event.started_at).getHours()].qty += qty;
+      if (p.type?.unit) unit = p.type.unit;
+    }
+
     const type = p.type;
     if (type) {
-      const entry = byType.get(type.id) || { name: type.name, icon: type.icon, color: type.color, count: 0, ms: 0 };
+      const entry = byType.get(type.id) || { name: type.name, icon: type.icon, color: type.color, count: 0, ms: 0, qty: 0 };
       entry.count += 1;
+      entry.qty += qty;
       byType.set(type.id, entry);
     }
     for (const id of S.labelIdsOf(event)) {
       const label = S.state.labels.get(id);
       if (!label || label.deleted) continue;
-      const entry = byLabel.get(id) || { name: label.name, color: label.color, count: 0, ms: 0 };
+      const entry = byLabel.get(id) || { name: label.name, color: label.color, count: 0, ms: 0, qty: 0 };
       entry.count += 1;
+      entry.qty += qty;
       byLabel.set(id, entry);
     }
 
@@ -1412,25 +1561,30 @@ function computeStats(events, from, to, now) {
     }
   }
 
-  return { days, hours, byType, byLabel, total, totalMs, dayCount: days.size };
+  return { days, hours, byType, byLabel, total, totalMs, totalQty, unit, dayCount: days.size };
 }
 
 const hasSpans = (events) =>
   events.some((e) => e.ended_at === null || e.ended_at !== e.started_at);
 
-function barChartHtml(buckets, { metric, tickEvery, tickFor, labelFor }) {
-  const values = buckets.map((b) => (metric === "time" ? b.ms : b.count));
+const metricValue = (bucket, metric) =>
+  metric === "time" ? bucket.ms : metric === "amount" ? bucket.qty : bucket.count;
+
+function barChartHtml(buckets, { metric, tickEvery, tickFor, labelFor, unit = "" }) {
+  const format = (v) =>
+    metric === "time" ? duration(v) : metric === "amount" ? `${Math.round(v * 10) / 10}${unit}` : String(v);
+  const values = buckets.map((b) => metricValue(b, metric));
   const peak = Math.max(...values, 1);
   // Durations are wide, so only label them when a bar can hold one.
-  const showValues = metric === "time" ? buckets.length <= 7 : buckets.length <= 14;
+  const showValues = metric === "count" ? buckets.length <= 14 : buckets.length <= 7;
 
   const cols = buckets
     .map((b, i) => {
       const value = values[i];
       const height = value ? Math.max((value / peak) * 100, 4) : 0;
-      const shown = metric === "time" ? (value ? duration(value) : "") : value || "";
+      const shown = value ? format(value) : "";
       return `
-        <div class="bar-col" title="${esc(`${labelFor(b, i)}: ${metric === "time" ? duration(value) : value}`)}">
+        <div class="bar-col" title="${esc(`${labelFor(b, i)}: ${format(value)}`)}">
           ${showValues ? `<span class="bar-val">${esc(String(shown))}</span>` : ""}
           <div class="bar ${value ? "" : "zero"}" style="height:${height}%"></div>
           <span class="bar-tick">${i % tickEvery === 0 ? esc(tickFor(b, i)) : ""}</span>
@@ -1441,25 +1595,29 @@ function barChartHtml(buckets, { metric, tickEvery, tickFor, labelFor }) {
   return `<div class="bars">${cols}</div>`;
 }
 
-function rankHtml(map, metric) {
+function rankHtml(map, metric, unit = "") {
   // A moment has no duration, so listing it as "0s" is noise, not information.
   const rows = [...map.values()]
-    .filter((r) => (metric === "time" ? r.ms > 0 : r.count > 0))
-    .sort((a, b) => (metric === "time" ? b.ms - a.ms : b.count - a.count));
+    .filter((r) => metricValue(r, metric) > 0)
+    .sort((a, b) => metricValue(b, metric) - metricValue(a, metric));
   if (!rows.length) return "";
-  const peak = Math.max(...rows.map((r) => (metric === "time" ? r.ms : r.count)), 1);
+  const peak = Math.max(...rows.map((r) => metricValue(r, metric)), 1);
   return `
     <div class="rank">
       ${rows
         .map((r) => {
-          const value = metric === "time" ? r.ms : r.count;
+          const value = metricValue(r, metric);
           return `
             <div class="rank-row">
               <span class="rank-name">${esc(r.icon || "")} ${esc(r.name)}</span>
               <div class="rank-track">
                 <div class="rank-fill" style="width:${(value / peak) * 100}%;background:${esc(r.color)}"></div>
               </div>
-              <span class="rank-val">${esc(metric === "time" ? duration(r.ms) : String(r.count))}</span>
+              <span class="rank-val">${esc(
+                metric === "time" ? duration(r.ms)
+                  : metric === "amount" ? `${Math.round(r.qty * 10) / 10}${unit}`
+                  : String(r.count)
+              )}</span>
             </div>`;
         })
         .join("")}
@@ -1470,7 +1628,10 @@ function statsHtml(events, now) {
   const { from, to } = periodBounds(events, now);
   const s = computeStats(events, from, to, now);
   const spans = hasSpans(events);
-  const metric = spans ? statsMetric : "count";
+  const amounts = s.totalQty > 0;
+  // Offer only the metrics the data can answer.
+  const available = ["count", ...(spans ? ["time"] : []), ...(amounts ? ["amount"] : [])];
+  const metric = available.includes(statsMetric) ? statsMetric : "count";
 
   const dayBuckets = [...s.days.entries()].map(([start, v]) => ({ start, ...v }));
   const perDay = s.dayCount ? s.total / s.dayCount : 0;
@@ -1480,16 +1641,22 @@ function statsHtml(events, now) {
     { value: perDay.toFixed(perDay < 10 ? 1 : 0), key: "per day" },
     ...(s.totalMs ? [{ value: duration(s.totalMs), key: "total time" }] : []),
     ...(s.totalMs ? [{ value: duration(s.totalMs / Math.max(s.dayCount, 1)), key: "time/day" }] : []),
+    ...(amounts ? [{ value: `${Math.round(s.totalQty * 10) / 10}${s.unit}`, key: "total" }] : []),
+    ...(amounts
+      ? [{ value: `${Math.round((s.totalQty / Math.max(s.dayCount, 1)) * 10) / 10}${s.unit}`, key: `${s.unit}/day` }]
+      : []),
   ];
 
   const periodChips = PERIODS.map(
     (p) => `<button class="chip ${statsPeriod === p.key ? "on" : ""}" data-period="${p.key}">${p.label}</button>`
   ).join("");
 
-  const metricChips = spans
+  const metricLabel = { count: "Count", time: "Time", amount: "Amount" };
+  const metricChips = available.length > 1
     ? `<div class="chips metric-chips">
-         <button class="chip ${metric === "count" ? "on" : ""}" data-metric="count">Count</button>
-         <button class="chip ${metric === "time" ? "on" : ""}" data-metric="time">Time</button>
+         ${available.map(
+           (m) => `<button class="chip ${metric === m ? "on" : ""}" data-metric="${m}">${metricLabel[m]}</button>`
+         ).join("")}
        </div>`
     : "";
 
@@ -1523,6 +1690,7 @@ function statsHtml(events, now) {
         <div class="section-head"><h3>Per day</h3></div>
         ${barChartHtml(dayBuckets, {
           metric,
+          unit: s.unit,
           tickEvery,
           tickFor: (b) =>
             new Date(b.start).toLocaleDateString(undefined, { day: "numeric", month: "short" }),
@@ -1534,6 +1702,7 @@ function statsHtml(events, now) {
         <div class="section-head"><h3>Time of day</h3></div>
         ${barChartHtml(s.hours, {
           metric,
+          unit: s.unit,
           tickEvery: 6,
           tickFor: (_, i) => pad(i),
           labelFor: (_, i) => `${pad(i)}:00`,
@@ -1542,14 +1711,14 @@ function statsHtml(events, now) {
 
       <div class="section">
         <div class="section-head"><h3>By event</h3></div>
-        ${rankHtml(s.byType, metric)}
+        ${rankHtml(s.byType, metric, s.unit)}
       </div>
 
       ${
         s.byLabel.size
           ? `<div class="section">
                <div class="section-head"><h3>By label</h3></div>
-               ${rankHtml(s.byLabel, metric)}
+               ${rankHtml(s.byLabel, metric, s.unit)}
              </div>`
           : ""
       }
