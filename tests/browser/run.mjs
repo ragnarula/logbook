@@ -398,6 +398,53 @@ test("rapid tapping cannot trigger the browser's zoom gestures", async (browser,
   eq(errors, [], "javascript errors");
 });
 
+test("amounts are totalled per unit, never across them", async (browser, cookie) => {
+  const at = Date.now() - 3 * 3600_000;
+  await sync(BASE, cookie, {
+    ...project("p-units"),
+    event_types: [
+      { id: "t-ml", project_id: "p-units", name: "Bottle", kind: "point", icon: "B", color: "#f87171",
+        position: 0, unit: "ml", step: 10, default_quantity: 100, archived: 0, deleted: 0, updated_at: 1 },
+      { id: "t-kg", project_id: "p-units", name: "Weight", kind: "point", icon: "W", color: "#60a5fa",
+        position: 1, unit: "kg", step: 1, default_quantity: 4, archived: 0, deleted: 0, updated_at: 1 },
+    ],
+    events: [
+      { id: "e-ml-1", project_id: "p-units", type_id: "t-ml", started_at: at, ended_at: at,
+        label_ids: [], note: "", quantity: 100, deleted: 0, updated_at: 1 },
+      { id: "e-ml-2", project_id: "p-units", type_id: "t-ml", started_at: at + 1000, ended_at: at + 1000,
+        label_ids: [], note: "", quantity: 50, deleted: 0, updated_at: 1 },
+      { id: "e-kg-1", project_id: "p-units", type_id: "t-kg", started_at: at + 2000, ended_at: at + 2000,
+        label_ids: [], note: "", quantity: 4.2, deleted: 0, updated_at: 1 },
+    ],
+  });
+  const { page, errors } = await openApp(browser, BASE, { passcode: PASSCODE, select: "p-units" });
+  await page.click("#history-btn");
+  await wait(1000);
+  await page.click("[data-view='stats']");
+  await wait(1200);
+  await page.click("[data-metric='amount']");
+  await wait(1200);
+
+  const mixed = await page.evaluate(() => ({
+    tiles: [...document.querySelectorAll(".stat")].map((e) => e.textContent.trim().replace(/\s+/g, " ")),
+    ranks: [...document.querySelectorAll(".rank-row")].map((e) => e.textContent.trim().replace(/\s+/g, " ")),
+  }));
+  // 150ml and 4.2kg have no sum, so no combined total may be shown.
+  ok(!mixed.tiles.some((t) => t.includes("154")), `amounts were added across units: ${JSON.stringify(mixed.tiles)}`);
+  ok(mixed.ranks.some((r) => r.includes("150ml")), `no per-unit breakdown: ${JSON.stringify(mixed.ranks)}`);
+  ok(mixed.ranks.some((r) => r.includes("4.2kg")), "the second unit lost its own total");
+
+  // Narrowed to one unit, the totals are meaningful again.
+  await page.click("[data-filter-type='t-ml']");
+  await wait(1200);
+  const one = await page.evaluate(() =>
+    [...document.querySelectorAll(".stat")].map((e) => e.textContent.trim().replace(/\s+/g, " ")));
+  ok(one.some((t) => t.includes("150ml") && t.toLowerCase().includes("total")), `no total: ${JSON.stringify(one)}`);
+  ok(one.some((t) => t.includes("75ml") && t.includes("per entry")), `no average per entry: ${JSON.stringify(one)}`);
+  ok(!one.some((t) => /ml\s+ml/.test(t)), `the unit is doubled in a label: ${JSON.stringify(one)}`);
+  eq(errors, [], "javascript errors");
+});
+
 // ---------------------------------------------------------------------------
 
 const browser = await puppeteer.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"] });

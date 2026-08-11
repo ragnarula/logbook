@@ -1522,7 +1522,10 @@ function computeStats(events, from, to, now) {
   let total = 0;
   let totalMs = 0;
   let totalQty = 0;
-  let unit = "";
+  let qtyEntries = 0;
+  // Amounts only add up within a unit. Millilitres and kilograms share a
+  // column in the table but not a total.
+  const units = new Set();
 
   for (let d = from; d < to; d = dayBounds(d).end) days.set(d, { count: 0, ms: 0, qty: 0 });
 
@@ -1545,14 +1548,17 @@ function computeStats(events, from, to, now) {
     const qty = Number(event.quantity) || 0;
     if (qty) {
       totalQty += qty;
+      qtyEntries += 1;
       if (days.has(startDay)) days.get(startDay).qty += qty;
       hours[new Date(event.started_at).getHours()].qty += qty;
-      if (p.type?.unit) unit = p.type.unit;
+      if (p.type?.unit) units.add(p.type.unit);
     }
 
     const type = p.type;
     if (type) {
-      const entry = byType.get(type.id) || { name: type.name, icon: type.icon, color: type.color, count: 0, ms: 0, qty: 0 };
+      const entry = byType.get(type.id) || {
+        name: type.name, icon: type.icon, color: type.color, unit: type.unit, count: 0, ms: 0, qty: 0,
+      };
       entry.count += 1;
       entry.qty += qty;
       byType.set(type.id, entry);
@@ -1560,9 +1566,15 @@ function computeStats(events, from, to, now) {
     for (const id of S.labelIdsOf(event)) {
       const label = S.state.labels.get(id);
       if (!label || label.deleted) continue;
-      const entry = byLabel.get(id) || { name: label.name, color: label.color, count: 0, ms: 0, qty: 0 };
+      const entry = byLabel.get(id) || { name: label.name, color: label.color, unit: null, count: 0, ms: 0, qty: 0 };
       entry.count += 1;
       entry.qty += qty;
+      // A label can sit on types measured differently, and those cannot be
+      // added together.
+      if (qty && p.type?.unit) {
+        if (entry.unit === null) entry.unit = p.type.unit;
+        else if (entry.unit !== p.type.unit) entry.mixed = true;
+      }
       byLabel.set(id, entry);
     }
 
@@ -1586,7 +1598,11 @@ function computeStats(events, from, to, now) {
     }
   }
 
-  return { days, hours, byType, byLabel, total, totalMs, totalQty, unit, dayCount: days.size };
+  const unit = units.size === 1 ? [...units][0] : "";
+  return {
+    days, hours, byType, byLabel, total, totalMs, totalQty, qtyEntries,
+    unit, mixedUnits: units.size > 1, dayCount: days.size,
+  };
 }
 
 const hasSpans = (events) =>
@@ -1620,10 +1636,11 @@ function barChartHtml(buckets, { metric, tickEvery, tickFor, labelFor, unit = ""
   return `<div class="bars">${cols}</div>`;
 }
 
-function rankHtml(map, metric, unit = "") {
+function rankHtml(map, metric) {
   // A moment has no duration, so listing it as "0s" is noise, not information.
   const rows = [...map.values()]
     .filter((r) => metricValue(r, metric) > 0)
+    .filter((r) => !(metric === "amount" && r.mixed))
     .sort((a, b) => metricValue(b, metric) - metricValue(a, metric));
   if (!rows.length) return "";
   const peak = Math.max(...rows.map((r) => metricValue(r, metric)), 1);
@@ -1640,7 +1657,7 @@ function rankHtml(map, metric, unit = "") {
               </div>
               <span class="rank-val">${esc(
                 metric === "time" ? duration(r.ms)
-                  : metric === "amount" ? `${Math.round(r.qty * 10) / 10}${unit}`
+                  : metric === "amount" ? `${Math.round(r.qty * 10) / 10}${r.unit || ""}`
                   : String(r.count)
               )}</span>
             </div>`;
@@ -1661,14 +1678,28 @@ function statsHtml(events, now) {
   const dayBuckets = [...s.days.entries()].map(([start, v]) => ({ start, ...v }));
   const perDay = s.dayCount ? s.total / s.dayCount : 0;
 
+  // The unit belongs in the value, not in the label, or the tile reads
+  // "173.6ml ml/day".
+  const amountText = (v) => `${Math.round(v * 10) / 10}${s.unit}`;
+
+  // Tiles follow the chosen metric. Showing count, time and amount at once
+  // came to eight tiles, which is a wall of numbers rather than an answer.
   const tiles = [
     { value: String(s.total), key: "entries" },
     { value: perDay.toFixed(perDay < 10 ? 1 : 0), key: "per day" },
-    ...(s.totalMs ? [{ value: duration(s.totalMs), key: "total time" }] : []),
-    ...(s.totalMs ? [{ value: duration(s.totalMs / Math.max(s.dayCount, 1)), key: "time/day" }] : []),
-    ...(amounts ? [{ value: `${Math.round(s.totalQty * 10) / 10}${s.unit}`, key: "total" }] : []),
-    ...(amounts
-      ? [{ value: `${Math.round((s.totalQty / Math.max(s.dayCount, 1)) * 10) / 10}${s.unit}`, key: `${s.unit}/day` }]
+    ...(metric === "time" && s.totalMs
+      ? [
+          { value: duration(s.totalMs), key: "total time" },
+          { value: duration(s.totalMs / Math.max(s.dayCount, 1)), key: "time per day" },
+        ]
+      : []),
+    ...(metric === "amount" && amounts && !s.mixedUnits
+      ? [
+          { value: amountText(s.totalQty), key: "total" },
+          { value: amountText(s.totalQty / Math.max(s.dayCount, 1)), key: "per day" },
+          // What a single feed or dose usually is, which the totals hide.
+          { value: amountText(s.totalQty / Math.max(s.qtyEntries, 1)), key: "per entry" },
+        ]
       : []),
   ];
 
@@ -1700,6 +1731,13 @@ function statsHtml(events, now) {
       <div class="chips">${periodChips}</div>
       ${metricChips}
 
+      ${
+        metric === "amount" && s.mixedUnits
+          ? `<p class="note-text">These events are measured in different units, so
+               only the breakdown below adds up.</p>`
+          : ""
+      }
+
       <div class="stat-grid">
         ${tiles
           .map(
@@ -1711,6 +1749,7 @@ function statsHtml(events, now) {
           .join("")}
       </div>
 
+      ${metric === "amount" && s.mixedUnits ? "" : `
       <div class="section">
         <div class="section-head"><h3>Per day</h3></div>
         ${barChartHtml(dayBuckets, {
@@ -1734,16 +1773,18 @@ function statsHtml(events, now) {
         })}
       </div>
 
+      `}
+
       <div class="section">
         <div class="section-head"><h3>By event</h3></div>
-        ${rankHtml(s.byType, metric, s.unit)}
+        ${rankHtml(s.byType, metric)}
       </div>
 
       ${
         s.byLabel.size
           ? `<div class="section">
                <div class="section-head"><h3>By label</h3></div>
-               ${rankHtml(s.byLabel, metric, s.unit)}
+               ${rankHtml(s.byLabel, metric)}
              </div>`
           : ""
       }
