@@ -1643,7 +1643,15 @@ function rankHtml(map, metric) {
     .filter((r) => !(metric === "amount" && r.mixed))
     .sort((a, b) => metricValue(b, metric) - metricValue(a, metric));
   if (!rows.length) return "";
-  const peak = Math.max(...rows.map((r) => metricValue(r, metric)), 1);
+  // Bars are only comparable within a unit. Scaling millilitres and kilograms
+  // against one shared peak drew a full bar beside a dot and implied a ratio
+  // between two things that cannot be compared.
+  const peaks = new Map();
+  const groupOf = (r) => (metric === "amount" ? r.unit || "" : "");
+  for (const r of rows) {
+    const key = groupOf(r);
+    peaks.set(key, Math.max(peaks.get(key) || 0, metricValue(r, metric)));
+  }
   return `
     <div class="rank">
       ${rows
@@ -1653,7 +1661,7 @@ function rankHtml(map, metric) {
             <div class="rank-row">
               <span class="rank-name">${esc(r.icon || "")} ${esc(r.name)}</span>
               <div class="rank-track">
-                <div class="rank-fill" style="width:${(value / peak) * 100}%;background:${esc(r.color)}"></div>
+                <div class="rank-fill" style="width:${(value / (peaks.get(groupOf(r)) || 1)) * 100}%;background:${esc(r.color)}"></div>
               </div>
               <span class="rank-val">${esc(
                 metric === "time" ? duration(r.ms)
