@@ -1301,7 +1301,11 @@ function labelStripe(event) {
 function eventPieces(event, now) {
   const type = S.state.event_types.get(event.type_id);
   const open = event.ended_at === null;
-  const isMoment = !open && event.ended_at === event.started_at;
+  // The type decides the shape, not the row. A moment type drawn from its own
+  // data would render any stray end as a bar whose width is that mistake, and
+  // a converted type would keep showing durations that no longer mean
+  // anything. Without a type to ask — a deleted one — fall back to the row.
+  const isMoment = type ? type.kind !== "span" : !open && event.ended_at === event.started_at;
   return {
     type,
     open,

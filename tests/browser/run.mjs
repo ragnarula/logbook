@@ -340,6 +340,33 @@ test("correcting a moment's time leaves it a moment", async (browser, cookie) =>
   eq(errors, [], "javascript errors");
 });
 
+test("the timeline draws by type, so a moment never becomes a bar", async (browser, cookie) => {
+  const at = Date.now() - 4 * 3600_000;
+  await sync(BASE, cookie, project("p-draw", {
+    types: [
+      { id: "t-draw-m", name: "Nappy", kind: "point" },
+      { id: "t-draw-s", name: "Sleep", kind: "span" },
+    ],
+    events: [
+      // A leftover duration on a moment type, from before it was converted.
+      { id: "e-draw-stray", type: "t-draw-m", start: at, end: at + 90 * 60_000 },
+      { id: "e-draw-span", type: "t-draw-s", start: at, end: at + 90 * 60_000 },
+    ],
+  }));
+  const { page, errors } = await openApp(browser, BASE, { passcode: PASSCODE, select: "p-draw" });
+
+  await page.click("#history-btn");
+  await wait(1400);
+  const drawn = await page.evaluate(() => ({
+    spans: [...document.querySelectorAll(".tl-span")].map((e) => e.dataset.id),
+    ticks: [...document.querySelectorAll(".tl-tick")].map((e) => e.dataset.id),
+  }));
+  ok(drawn.ticks.includes("e-draw-stray"), `a moment type was not drawn as a tick: ${JSON.stringify(drawn)}`);
+  ok(!drawn.spans.includes("e-draw-stray"), "a moment type was drawn as a bar sized by a stray duration");
+  ok(drawn.spans.includes("e-draw-span"), "a real span stopped being drawn as a bar");
+  eq(errors, [], "javascript errors");
+});
+
 // ---------------------------------------------------------------------------
 
 const browser = await puppeteer.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"] });
