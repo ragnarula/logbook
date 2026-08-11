@@ -52,7 +52,25 @@ body {
 body.sheet-open { overflow: hidden; }
 
 button, input, textarea { font: inherit; color: inherit; }
-button { cursor: pointer; border: none; background: none; }
+
+/* iOS zooms the page when it sees a second tap within about 300ms, which is
+   exactly what stepping a time or an amount looks like. `manipulation` drops
+   the double-tap gesture while leaving pinch zoom alone, so the page can still
+   be zoomed deliberately. */
+button, a, .chip, .step, .swatch, .emoji, .seg {
+  touch-action: manipulation;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  background: none;
+  /* Stops the selection handles and the callout menu appearing on a fast or
+     held tap. Long pressing a tile is ours, and iOS must not take it. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
 h1, h2, h3 { margin: 0; }
 ul { list-style: none; margin: 0; padding: 0; }
 
@@ -508,7 +526,7 @@ ul { list-style: none; margin: 0; padding: 0; }
   background: var(--panel);
   border: 1px solid var(--border);
   color: var(--muted);
-  font-size: 13px;
+  font-size: 16px; /* below 16px iOS zooms in on focus */
 }
 
 .preview {
@@ -555,7 +573,7 @@ ul { list-style: none; margin: 0; padding: 0; }
   background: var(--panel-2);
   border: 1px solid var(--border);
   resize: vertical;
-  font-size: 15px;
+  font-size: 16px; /* below 16px iOS zooms in on focus */
 }
 
 .new-label {
@@ -635,7 +653,7 @@ ul { list-style: none; margin: 0; padding: 0; }
 .link-input {
   min-height: 42px;
   margin-bottom: 8px;
-  font-size: 12px;
+  font-size: 16px; /* below 16px iOS zooms in on focus */
   color: var(--muted);
 }
 

@@ -367,6 +367,37 @@ test("the timeline draws by type, so a moment never becomes a bar", async (brows
   eq(errors, [], "javascript errors");
 });
 
+test("rapid tapping cannot trigger the browser's zoom gestures", async (browser, cookie) => {
+  await sync(BASE, cookie, project("p-zoom", {
+    types: [{ id: "t-zoom", name: "Bottle", kind: "point" }],
+    events: [{ id: "e-zoom", type: "t-zoom", start: Date.now() - 600_000 }],
+  }));
+  const { page, errors } = await openApp(browser, BASE, { passcode: PASSCODE, select: "p-zoom" });
+
+  // Double-tap zoom is what fires when a stepper is pressed repeatedly.
+  const tiles = await page.$$eval(".tile[data-id], .tile-more",
+    (els) => els.map((e) => getComputedStyle(e).touchAction));
+  ok(tiles.every((v) => v === "manipulation"), `tiles allow double-tap zoom: ${JSON.stringify(tiles)}`);
+
+  await page.click(".entry[data-id='e-zoom']");
+  await wait(1000);
+  const sheet = await page.evaluate(() => {
+    const of = (sel) => [...document.querySelectorAll(sel)].map((e) => getComputedStyle(e));
+    return {
+      steppers: of("#sheet-backdrop .step").map((c) => c.touchAction),
+      chips: of("#sheet-backdrop .chip").map((c) => c.touchAction),
+      // Below 16px, focusing a field zooms the page in and leaves it zoomed.
+      fields: of("#sheet-backdrop input, #sheet-backdrop textarea").map((c) => parseFloat(c.fontSize)),
+    };
+  });
+  ok(sheet.steppers.length && sheet.steppers.every((v) => v === "manipulation"),
+    `steppers allow double-tap zoom: ${JSON.stringify(sheet.steppers)}`);
+  ok(sheet.chips.every((v) => v === "manipulation"), "chips allow double-tap zoom");
+  ok(sheet.fields.every((size) => size >= 16),
+    `a field below 16px will zoom the page on focus: ${JSON.stringify(sheet.fields)}`);
+  eq(errors, [], "javascript errors");
+});
+
 // ---------------------------------------------------------------------------
 
 const browser = await puppeteer.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"] });
