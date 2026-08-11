@@ -317,6 +317,29 @@ test("an event left open by a stale device is repaired, not shown as running", a
   eq(errors, [], "javascript errors");
 });
 
+test("correcting a moment's time leaves it a moment", async (browser, cookie) => {
+  const at = Date.now() - 30 * 60_000;
+  await sync(BASE, cookie, project("p-moment", {
+    types: [{ id: "t-moment", name: "Nappy", kind: "point" }],
+    events: [{ id: "e-moment", type: "t-moment", start: at }],
+  }));
+  const { page, errors } = await openApp(browser, BASE, { passcode: PASSCODE, select: "p-moment" });
+
+  await page.click(".entry[data-id='e-moment']");
+  await wait(900);
+  // Shift the time back a quarter of an hour, as anyone correcting an entry
+  // logged late would.
+  await page.click("[data-shift='started_at:-15']");
+  await wait(300);
+  await clickText(page, "save");
+  await wait(2000);
+
+  const saved = (await liveEvents(BASE, cookie)).find((e) => e.id === "e-moment");
+  eq(saved.started_at, at - 15 * 60_000, "the time was not corrected");
+  eq(saved.ended_at, saved.started_at, "correcting the time turned the moment into a span");
+  eq(errors, [], "javascript errors");
+});
+
 // ---------------------------------------------------------------------------
 
 const browser = await puppeteer.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"] });

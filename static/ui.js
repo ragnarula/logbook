@@ -971,9 +971,13 @@ export function openEventSheet(event) {
 
     async function commit() {
       const note = panel.querySelector("[data-note]").value.trim();
+      // A moment has no duration: its end is its start, and it must follow the
+      // start when that is corrected. Without this, moving a moment back by
+      // fifteen minutes left the old end behind and silently turned it into a
+      // fifteen minute span — the correction created exactly the duration.
+      let ended = isSpan ? draft.ended_at : draft.started_at;
       // An end dragged behind the start is a mis-tap on the stepper; clamping
       // beats storing a negative duration.
-      let ended = draft.ended_at;
       if (ended != null && ended < draft.started_at) ended = draft.started_at;
       closeSheet();
       await S.put("events", {
