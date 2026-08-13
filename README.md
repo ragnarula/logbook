@@ -138,6 +138,9 @@ device that cannot reach the server still saves entries and sends them later.
 7. **Make actions reversible.** The user can undo an action instead of
    confirming it first.
 
+[DECISIONS.md](DECISIONS.md) records the decisions behind these principles: what
+each one solved, what we rejected, and what would make it wrong.
+
 ## High level architecture
 
 **Server.** One Python process using FastAPI, with one SQLite file. It stores
