@@ -291,6 +291,11 @@ function tileHtml(type) {
   const last = S.lastEventOfType(type.id);
   const running = type.kind === "span" && last && last.ended_at === null;
   const paused = running && S.isPaused(last);
+  // The amount from the entry the "ago" above it refers to, not the amount the
+  // next tap would record. Sitting under "1h 35m ago", a fixed number read as a
+  // claim about the last entry, so it now is one. What a tap records is still
+  // the type's setting, and the tile menu and edit sheet both show it.
+  const lastAmount = last ? S.amountText(type, last.quantity) : "";
   return `
     <div class="tile-wrap">
       <button class="tile ${running ? "running" : ""} ${paused ? "paused" : ""}" data-action="tile" data-id="${type.id}"
@@ -300,7 +305,9 @@ function tileHtml(type) {
         <span class="tile-ago" ${last ? `data-ago="${last.started_at}"` : ""}>${last ? "" : "never"}</span>
         ${
           type.unit
-            ? `<span class="tile-kind">${esc(S.amountText(type, Number(type.default_quantity) || 0))}</span>`
+            ? lastAmount
+              ? `<span class="tile-kind">${esc(lastAmount)}</span>`
+              : ""
             : type.kind === "span"
               ? `<span class="tile-kind">${paused ? "tap to resume" : running ? "tap to end" : "span"}</span>`
               : ""

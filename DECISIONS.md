@@ -347,3 +347,29 @@ entries and inflates every count.
 **Invalidated if.** A pause has to belong to something other than one event, or
 an event collects so many that the row becomes large.
 
+---
+
+## 2026-08-15 — A tile reports the last amount, not the next one
+
+**Problem.** A tile showed how long ago the event last happened, and under it the
+amount a tap would record. Read together, the second line looked like it
+described the entry the first line referred to. A tile saying "1h 35m ago" and
+"120ml" was reporting the last feed and the next one at once, and nothing said
+which was which.
+
+**Decision.** The tile shows the amount on the last entry. Both lines then
+describe the same event. A type with no entry yet shows no amount, because there
+is nothing to report.
+
+This narrows the decision of 2026-08-10, which said the tile shows the amount a
+tap records. What a tap records is unchanged and still comes from the type. Only
+the tile stopped being where that is read; the tile menu and the edit sheet both
+show the setting.
+
+**Alternatives.** Label the two lines. Rejected because a tile is about
+seventy pixels wide and two labels cost more room than the numbers. Rejected
+dropping the amount from the tile, because seeing the last feed at a glance is
+why it is there.
+
+**Invalidated if.** Users need to check what a tap will record without opening
+anything, for instance after changing the setting.

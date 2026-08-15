@@ -228,14 +228,18 @@ test("a tap records the amount set up on the type, and the bar corrects it", asy
   });
   const { page, errors } = await openApp(browser, BASE, { passcode: PASSCODE, select: "p-qty" });
 
-  // The tile says what a tap will record, so it is not a surprise.
+  // Nothing has been logged, so the tile has no amount to report. Showing the
+  // type's setting here read as a claim about a last entry that did not exist.
   const tile = await page.$eval(".tile[data-id='t-qty']", (el) => el.textContent);
-  ok(tile.includes("120ml"), `the tile does not show the amount: ${tile}`);
+  ok(!tile.includes("ml"), `the tile invented an amount before anything was logged: ${tile}`);
 
   await page.click(".tile[data-id='t-qty']");
   await wait(1500);
   const logged = (await liveEvents(BASE, cookie)).find((e) => e.type_id === "t-qty");
   eq(logged.quantity, 120, "amount recorded by one tap");
+
+  const afterTap = await page.$eval(".tile[data-id='t-qty']", (el) => el.textContent);
+  ok(afterTap.includes("120ml"), `the tile does not show what was logged: ${afterTap}`);
 
   // Two taps on plus, one on minus: 120 + 10 + 10 - 10 = 130.
   const plus = await page.evaluateHandle(() =>
@@ -248,6 +252,10 @@ test("a tap records the amount set up on the type, and the bar corrects it", asy
   await minus.asElement().click(); await wait(1500);
 
   eq((await liveEvents(BASE, cookie)).find((e) => e.id === logged.id).quantity, 130, "amount after stepping");
+  // The tile follows the correction. This is the whole point of showing the
+  // last amount rather than the setting: 130 is what actually happened.
+  const corrected = await page.$eval(".tile[data-id='t-qty']", (el) => el.textContent);
+  ok(corrected.includes("130ml"), `the tile still shows the type's setting: ${corrected}`);
   // Stepping must not dismiss the bar, or a second correction is impossible.
   ok(await page.evaluate(() => !document.getElementById("toast").hidden), "the bar closed while stepping");
 
