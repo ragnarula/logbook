@@ -8,8 +8,9 @@
 // already.
 //
 // It shows any running span with the time it started, and tapping one opens the
-// app on a link that ends it. When nothing is running it shows the event types
-// so a tap can start one.
+// app on a link that ends it. A paused span shows when it was paused, and
+// tapping it resumes. When nothing is running it shows the event types so a tap
+// can start one.
 //
 // It deliberately shows a start time, not a counter. iOS refreshes widgets on
 // its own schedule, so a counter would sit there showing a wrong number.
@@ -59,8 +60,13 @@ if (data) {
         icon: s.icon,
         name: s.name,
         color: s.color,
-        detail: `since ${clock(s.started_at)}`,
-        url: `${BASE}/?end=${encodeURIComponent(s.id)}`,
+        // A paused row says so rather than showing a start time, which would
+        // read as still counting. Tapping it continues it; ending a paused
+        // span is a decision worth opening the app for.
+        detail: s.paused_at ? `paused ${clock(s.paused_at)}` : `since ${clock(s.started_at)}`,
+        url: s.paused_at
+          ? `${BASE}/?resume=${encodeURIComponent(s.id)}`
+          : `${BASE}/?end=${encodeURIComponent(s.id)}`,
       }))
     : (data.types || []).slice(0, MAX_ROWS).map((t) => ({
         id: t.id,

@@ -56,7 +56,7 @@ TABLES = {
     "labels": ["id", "project_id", "name", "color", "archived", "deleted", "updated_at"],
     "events": [
         "id", "project_id", "type_id", "started_at", "ended_at",
-        "label_ids", "note", "quantity", "deleted", "updated_at",
+        "label_ids", "note", "quantity", "pauses", "deleted", "updated_at",
     ],
 }
 
@@ -65,8 +65,12 @@ TABLES = {
 # rather than rejected — a dropped event is worse than a defaulted field.
 TEXT_COLS = {
     "id", "name", "color", "icon", "kind", "note",
-    "project_id", "type_id", "label_ids",
+    "project_id", "type_id", "label_ids", "pauses",
 }
+# Columns holding a JSON document rather than a scalar. They are stored as text
+# and never read by the server — a row is merged whole, so nothing here has to
+# understand what is inside them.
+JSON_COLS = {"label_ids": "[]", "pauses": "[]"}
 INT_COLS = {"archived", "deleted", "position", "updated_at", "started_at"}
 NULLABLE_INT_COLS = {"ended_at"}
 # Amounts are decimal: 4.2 kg would not survive the integer path.
@@ -121,6 +125,7 @@ CREATE TABLE IF NOT EXISTS events (
     label_ids   TEXT NOT NULL DEFAULT '[]',
     note        TEXT NOT NULL DEFAULT '',
     quantity    REAL,
+    pauses      TEXT NOT NULL DEFAULT '[]',
     deleted     INTEGER NOT NULL DEFAULT 0,
     updated_at  INTEGER NOT NULL DEFAULT 0,
     seq         INTEGER NOT NULL DEFAULT 0
@@ -175,7 +180,10 @@ LATER_COLUMNS = {
         ("step", "REAL NOT NULL DEFAULT 1"),
         ("default_quantity", "REAL NOT NULL DEFAULT 0"),
     ],
-    "events": [("quantity", "REAL")],
+    "events": [
+        ("quantity", "REAL"),
+        ("pauses", "TEXT NOT NULL DEFAULT '[]'"),
+    ],
 }
 
 
@@ -267,6 +275,13 @@ def coerce(table: str, raw: dict) -> dict | None:
                     val = json.dumps([str(v) for v in val if isinstance(v, (str, int))])
                 elif not isinstance(val, str):
                     val = "[]"
+            elif col in JSON_COLS:
+                # Same deal, but the contents are not strings, so they are
+                # passed through as sent. The client parses defensively.
+                if isinstance(val, list):
+                    val = json.dumps(val)
+                elif not isinstance(val, str) or not val:
+                    val = JSON_COLS[col]
             out[col] = ("" if val is None else str(val))[:4096]
     return out
 
@@ -520,7 +535,7 @@ def widget_data(project: str, _: None = Depends(require_auth)):
     conn = db()
     with _lock:
         active = conn.execute(
-            "SELECT e.id, e.started_at, t.name, t.icon, t.color "
+            "SELECT e.id, e.started_at, e.pauses, t.name, t.icon, t.color "
             "FROM events e JOIN event_types t ON t.id = e.type_id "
             "WHERE e.project_id = ? AND e.deleted = 0 AND e.ended_at IS NULL "
             "ORDER BY e.started_at",
@@ -541,6 +556,9 @@ def widget_data(project: str, _: None = Depends(require_auth)):
                 "icon": r["icon"],
                 "color": r["color"],
                 "started_at": r["started_at"],
+                # So the widget can say "paused" rather than showing a start
+                # time that implies it is still counting.
+                "paused_at": open_pause(r["pauses"]),
             }
             for r in active
         ],
@@ -619,7 +637,8 @@ def export_csv(project: str, _: None = Depends(require_auth)):
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(
-        ["id", "event", "started_at", "ended_at", "duration_seconds",
+        ["id", "event", "started_at", "ended_at",
+         "duration_seconds", "paused_seconds", "active_seconds",
          "quantity", "unit", "labels", "note"]
     )
     for ev in events:
@@ -629,9 +648,13 @@ def export_csv(project: str, _: None = Depends(require_auth)):
             ]
         except (TypeError, ValueError):
             label_names = []
-        duration = ""
+        duration = paused = active = ""
         if ev["ended_at"] is not None:
-            duration = str(round((ev["ended_at"] - ev["started_at"]) / 1000))
+            wall = ev["ended_at"] - ev["started_at"]
+            paused_ms = paused_span(ev["pauses"], ev["started_at"], ev["ended_at"])
+            duration = str(round(wall / 1000))
+            paused = str(round(paused_ms / 1000))
+            active = str(round((wall - paused_ms) / 1000))
         name, unit = types.get(ev["type_id"], (ev["type_id"], ""))
         writer.writerow(
             [
@@ -640,6 +663,8 @@ def export_csv(project: str, _: None = Depends(require_auth)):
                 iso(ev["started_at"]),
                 iso(ev["ended_at"]),
                 duration,
+                paused,
+                active,
                 "" if ev["quantity"] is None else ev["quantity"],
                 unit,
                 "; ".join(label_names),
@@ -653,6 +678,49 @@ def export_csv(project: str, _: None = Depends(require_auth)):
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+def open_pause(raw: str | None) -> int | None:
+    """When the pause in progress began, or None if the event is running."""
+    try:
+        pauses = json.loads(raw or "[]")
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(pauses, list) or not pauses:
+        return None
+    last = pauses[-1]
+    if not isinstance(last, list) or len(last) != 2 or last[1] is not None:
+        return None
+    return last[0] if isinstance(last[0], (int, float)) else None
+
+
+def paused_span(raw: str | None, started_at: int, ended_at: int) -> int:
+    """Total paused milliseconds inside one event.
+
+    The only place the server looks inside a JSON column. It is arithmetic on
+    timestamps rather than a rule about what an event means, and it exists so
+    the export can report the time that actually elapsed. Anything malformed
+    counts as no pause, because a wrong number is worse than a missing one.
+    """
+    try:
+        pauses = json.loads(raw or "[]")
+    except (TypeError, ValueError):
+        return 0
+    if not isinstance(pauses, list):
+        return 0
+    total = 0
+    for pause in pauses:
+        if not isinstance(pause, list) or len(pause) != 2:
+            continue
+        start, stop = pause
+        if not isinstance(start, (int, float)):
+            continue
+        # An open pause runs to the end of the event.
+        stop = ended_at if not isinstance(stop, (int, float)) else stop
+        start = min(max(start, started_at), ended_at)
+        stop = min(max(stop, start), ended_at)
+        total += stop - start
+    return int(total)
 
 
 def iso(ms: int | None) -> str:

@@ -200,6 +200,13 @@ const NAV_ICONS = {
   back: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>`,
 };
 
+// Drawn rather than typed: the pause and play characters render at wildly
+// different weights across platforms, and one of them is an emoji on iOS.
+const PAUSE_ICONS = {
+  pause: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5v14M15 5v14"/></svg>`,
+  resume: `<svg viewBox="0 0 24 24" aria-hidden="true"><path class="solid" d="M7 4l13 8-13 8z"/></svg>`,
+};
+
 export function showView(next, { push = true } = {}) {
   if (next === view) return;
   view = next;
@@ -283,9 +290,10 @@ export function render() {
 function tileHtml(type) {
   const last = S.lastEventOfType(type.id);
   const running = type.kind === "span" && last && last.ended_at === null;
+  const paused = running && S.isPaused(last);
   return `
     <div class="tile-wrap">
-      <button class="tile ${running ? "running" : ""}" data-action="tile" data-id="${type.id}"
+      <button class="tile ${running ? "running" : ""} ${paused ? "paused" : ""}" data-action="tile" data-id="${type.id}"
               style="--tile:${esc(type.color)}">
         <span class="tile-icon">${esc(type.icon) || "•"}</span>
         <span class="tile-name">${esc(type.name)}</span>
@@ -294,7 +302,7 @@ function tileHtml(type) {
           type.unit
             ? `<span class="tile-kind">${esc(S.amountText(type, Number(type.default_quantity) || 0))}</span>`
             : type.kind === "span"
-              ? `<span class="tile-kind">${running ? "tap to end" : "span"}</span>`
+              ? `<span class="tile-kind">${paused ? "tap to resume" : running ? "tap to end" : "span"}</span>`
               : ""
         }
       </button>
@@ -314,14 +322,19 @@ const addTileHtml = () => `
 function activeCardHtml(event) {
   const type = S.state.event_types.get(event.type_id);
   if (!type) return "";
+  const paused = S.isPaused(event);
+  // The card body opens the entry, which frees the room a third button would
+  // have taken. On a phone two controls beside a timer is already the limit.
   return `
-    <div class="active-card" style="--tile:${esc(type.color)}">
+    <div class="active-card ${paused ? "paused" : ""}" style="--tile:${esc(type.color)}">
       <span class="active-icon">${esc(type.icon) || "•"}</span>
-      <div class="active-main">
-        <div class="active-name">${esc(type.name)}</div>
-        <div class="active-timer" data-since="${event.started_at}">00:00:00</div>
-      </div>
-      <button class="btn ghost small" data-action="entry" data-id="${event.id}">Edit</button>
+      <button class="active-main" data-action="entry" data-id="${event.id}">
+        <span class="active-name">${esc(type.name)}${paused ? ` <span class="active-flag">paused</span>` : ""}</span>
+        <span class="active-timer" data-active="${event.id}">00:00:00</span>
+      </button>
+      <button class="btn ghost small pause-btn" data-action="${paused ? "resume-span" : "pause-span"}"
+              data-id="${event.id}" aria-label="${paused ? "Resume" : "Pause"} ${esc(type.name)}"
+              title="${paused ? "Resume" : "Pause"}">${paused ? PAUSE_ICONS.resume : PAUSE_ICONS.pause}</button>
       <button class="btn primary" data-action="end-span" data-id="${event.id}">End</button>
     </div>`;
 }
@@ -333,10 +346,14 @@ function entryHtml(event) {
     .filter(Boolean);
   const isOpenSpan = event.ended_at === null;
   let sub = clockTime(event.started_at);
-  if (isOpenSpan) sub += " · running";
+  if (isOpenSpan) sub += S.isPaused(event) ? " · paused" : " · running";
   else if (type?.kind === "span" && event.ended_at > event.started_at) {
-    sub += `–${clockTime(event.ended_at)} · ${duration(event.ended_at - event.started_at)}`;
+    // The duration is the time it ran, so it can be less than the two clock
+    // times either side of it suggest. The paused total below says why.
+    sub += `–${clockTime(event.ended_at)} · ${duration(S.activeMs(event))}`;
   }
+  const held = type?.kind === "span" ? S.pausedMs(event) : 0;
+  if (held) sub += ` · ${duration(held)} paused`;
   const amount = S.amountText(type, event.quantity);
   if (amount) sub += ` · ${amount}`;
   return `
@@ -370,8 +387,11 @@ export function renderSyncStatus() {
 /** Update elapsed-time text in place, so timers run without a re-render. */
 export function tick() {
   const now = Date.now();
-  for (const el of screenEl.querySelectorAll("[data-since]")) {
-    el.textContent = stopwatch(now - Number(el.dataset.since));
+  // Read from the event rather than a stored start time, so a paused span
+  // simply stops advancing without needing to be told.
+  for (const el of screenEl.querySelectorAll("[data-active]")) {
+    const event = S.state.events.get(el.dataset.active);
+    if (event) el.textContent = stopwatch(S.activeMs(event, now));
   }
   for (const el of screenEl.querySelectorAll("[data-ago]")) {
     el.textContent = `${duration(now - Number(el.dataset.ago))} ago`;
@@ -386,10 +406,12 @@ async function quickLog(type) {
   if (!type) return;
   const project = S.currentProject();
 
-  // A span type toggles: if one of its spans is open, the tap closes it.
+  // A span type toggles: if one of its spans is open, the tap closes it — or
+  // continues it, when it is paused. Resuming is what a tap on a paused thing
+  // is for; ending it is still one tap away on the card.
   if (type.kind === "span") {
     const running = S.openSpans(project.id).find((e) => e.type_id === type.id);
-    if (running) return endSpan(running);
+    if (running) return S.isPaused(running) ? resumeSpan(running) : endSpan(running);
   }
 
   const event = await S.createEvent(project.id, type);
@@ -434,11 +456,56 @@ function amountActions(type, event, said) {
 
 async function endSpan(event) {
   const type = S.state.event_types.get(event.type_id);
+  // Captured before the write, because ending while paused rewrites both.
+  const wasEnded = event.ended_at;
+  const wasPauses = event.pauses ?? "[]";
   await S.endEvent(event);
+  const stored = S.state.events.get(event.id);
   scheduleSync();
-  toast(`${esc(type?.name || "Span")} ended · ${esc(duration(Date.now() - event.started_at))}`, [
-    { label: "Undo", onClick: () => S.put("events", { id: event.id, ended_at: null }).then(scheduleSync) },
-    { label: "Edit", primary: true, onClick: () => openEventSheet(S.state.events.get(event.id)) },
+  const held = S.pausedMs(stored);
+  toast(
+    `${esc(type?.name || "Span")} ended · ${esc(duration(S.activeMs(stored)))}` +
+      (held ? ` · ${esc(duration(held))} paused` : ""),
+    [
+      {
+        label: "Undo",
+        onClick: () =>
+          S.put("events", { id: event.id, ended_at: wasEnded, pauses: wasPauses }).then(scheduleSync),
+      },
+      { label: "Edit", primary: true, onClick: () => openEventSheet(S.state.events.get(event.id)) },
+    ]
+  );
+}
+
+/**
+ * Pause and resume.
+ *
+ * Undo restores the whole pauses value from before the tap, rather than trying
+ * to reverse the change. One value in, one value out, and nothing to get wrong
+ * when the same span is paused and resumed several times.
+ */
+async function pauseSpan(event) {
+  if (!event || event.ended_at !== null || S.isPaused(event)) return;
+  const type = S.state.event_types.get(event.type_id);
+  const before = event.pauses ?? "[]";
+  await S.pauseEvent(event);
+  scheduleSync();
+  const stored = S.state.events.get(event.id);
+  toast(`${esc(type?.name || "Span")} paused · ${esc(duration(S.activeMs(stored)))} so far`, [
+    { label: "Undo", onClick: () => S.put("events", { id: event.id, pauses: before }).then(scheduleSync) },
+    { label: "Resume", primary: true, onClick: () => resumeSpan(S.state.events.get(event.id)) },
+  ]);
+}
+
+async function resumeSpan(event) {
+  if (!event || !S.isPaused(event)) return;
+  const type = S.state.event_types.get(event.type_id);
+  const before = event.pauses ?? "[]";
+  const since = S.pausedSince(event);
+  await S.resumeEvent(event);
+  scheduleSync();
+  toast(`${esc(type?.name || "Span")} resumed · ${esc(duration(Date.now() - since))} paused`, [
+    { label: "Undo", onClick: () => S.put("events", { id: event.id, pauses: before }).then(scheduleSync) },
   ]);
 }
 
@@ -479,18 +546,20 @@ export function hasPendingAction() {
 export function captureDeepLink() {
   const params = new URLSearchParams(location.search);
   const end = params.get("end");
+  const pause = params.get("pause");
+  const resume = params.get("resume");
   const typeId = params.get("toggle") || params.get("log");
-  if (!end && !typeId) return;
+  if (!end && !pause && !resume && !typeId) return;
   // Strip the action before doing anything, so reloading the page or restoring
   // the tab does not log the event a second time.
   history.replaceState(null, "", location.pathname);
-  pendingAction = { end, typeId };
+  pendingAction = { end, pause, resume, typeId };
 }
 
 /** Carry out a held action, if the device is in a position to do it. */
 export async function runPendingAction() {
   if (!pendingAction) return;
-  const { end, typeId } = pendingAction;
+  const { end, pause, resume, typeId } = pendingAction;
   pendingAction = null;
 
   // Wait for a sync before acting. This device may hold an old copy of the
@@ -499,14 +568,17 @@ export async function runPendingAction() {
   // delay. Offline, the sync fails quickly and the local copy is used.
   await sync();
 
-  if (end) {
-    const event = await waitForRow(() => S.state.events.get(end));
+  const eventId = end || pause || resume;
+  if (eventId) {
+    const event = await waitForRow(() => S.state.events.get(eventId));
     if (!event) return toast("That entry has not reached this device yet");
     if (event.deleted) return toast("That entry was deleted");
     if (event.ended_at !== null) {
       const type = S.state.event_types.get(event.type_id);
       return toast(`${esc(type?.name || "It")} had already ended`);
     }
+    if (pause) return S.isPaused(event) ? toast("It is already paused") : pauseSpan(event);
+    if (resume) return S.isPaused(event) ? resumeSpan(event) : toast("It is already running");
     return endSpan(event);
   }
 
@@ -792,13 +864,56 @@ export function openEventSheet(event) {
     quantity: event.quantity,
   };
 
+  // Read fresh from the store: pause and resume write straight through rather
+  // than waiting for Save, so this block is rebuilt after each one.
+  const liveEvent = () => S.state.events.get(event.id) || event;
+
+  const openBlockHtml = () => {
+    const live = liveEvent();
+    const since = S.pausedSince(live);
+    return `
+      <div class="running-note">${
+        since !== null
+          ? `Paused since ${esc(clockTime(since))} · ${esc(duration(S.activeMs(live)))} recorded`
+          : `Still running · started ${esc(clockTime(draft.started_at))}`
+      }</div>
+      <div class="row-actions">
+        <button class="btn ghost" data-action="${since !== null ? "sheet-resume" : "sheet-pause"}">
+          ${since !== null ? "Resume" : "Pause"}
+        </button>
+        <button class="btn primary big" data-action="end-now">End now</button>
+      </div>`;
+  };
+
+  /** Recorded pauses, each removable — a mis-tap has to be reversible. */
+  const pauseListHtml = () => {
+    const live = liveEvent();
+    const pauses = S.pausesOf(live);
+    if (!pauses.length) return "";
+    return `
+      <div class="section">
+        <div class="section-head"><h3>Pauses</h3></div>
+        <ul class="pause-list">
+          ${pauses
+            .map(([from, to], i) => {
+              const running = to === null || to === undefined;
+              return `<li class="pause-row">
+                        <span class="pause-when">${esc(clockTime(from))} – ${running ? "now" : esc(clockTime(to))}</span>
+                        <span class="pause-len">${esc(duration((running ? Date.now() : to) - from))}</span>
+                        <button class="icon-btn danger" data-remove-pause="${i}"
+                                aria-label="Remove this pause">✕</button>
+                      </li>`;
+            })
+            .join("")}
+        </ul>
+        <p class="note-text">Paused time is not counted in the duration.</p>
+      </div>`;
+  };
+
   const endBlock = !isSpan
     ? ""
     : draft.ended_at === null
-      ? `<div class="time-row" data-end-block>
-           <div class="running-note">Still running · started ${esc(clockTime(draft.started_at))}</div>
-           <button class="btn primary big" data-action="end-now">End now</button>
-         </div>`
+      ? `<div class="time-row" data-end-block>${openBlockHtml()}</div>`
       : `<div class="time-row" data-end-block>${timeControlsHtml("ended_at", "Ended")}</div>`;
 
   const html = `
@@ -806,6 +921,7 @@ export function openEventSheet(event) {
     <div class="sheet-body">
       <div class="time-row">${timeControlsHtml("started_at", isSpan ? "Started" : "Time")}</div>
       ${endBlock}
+      <div data-pauses>${pauseListHtml()}</div>
 
       <div class="section">
         <div class="section-head"><h3>Labels</h3></div>
@@ -852,6 +968,17 @@ export function openEventSheet(event) {
     const labelsEl = panel.querySelector("[data-labels]");
     const formEl = panel.querySelector("[data-new-label]");
     const nameEl = panel.querySelector("[data-label-name]");
+
+    const endBlockEl = panel.querySelector("[data-end-block]");
+    const pausesEl = panel.querySelector("[data-pauses]");
+
+    const refreshPauses = () => {
+      // Only the open form of the end block is pause-driven. The closed form
+      // holds the time steppers, which are driven by `draft` and must not be
+      // rebuilt underneath the user.
+      if (endBlockEl && draft.ended_at === null) endBlockEl.innerHTML = openBlockHtml();
+      pausesEl.innerHTML = pauseListHtml();
+    };
 
     const refreshAmount = () => {
       const el = panel.querySelector("[data-amount-value]");
@@ -924,8 +1051,29 @@ export function openEventSheet(event) {
         await addLabel();
         return;
       }
+      if (ev.target.closest("[data-action='sheet-pause']")) {
+        await S.pauseEvent(liveEvent());
+        scheduleSync();
+        refreshPauses();
+        return;
+      }
+      if (ev.target.closest("[data-action='sheet-resume']")) {
+        await S.resumeEvent(liveEvent());
+        scheduleSync();
+        refreshPauses();
+        return;
+      }
+      const dropPause = ev.target.closest("[data-remove-pause]");
+      if (dropPause) {
+        await S.removePause(liveEvent(), Number(dropPause.dataset.removePause));
+        scheduleSync();
+        refreshPauses();
+        return;
+      }
       if (ev.target.closest("[data-action='end-now']")) {
-        draft.ended_at = Date.now();
+        // Ending while paused ends it where the pause began. Nothing has
+        // accrued since, so ending at now would invent time.
+        draft.ended_at = S.pausedSince(liveEvent()) ?? Date.now();
         await commit();
         return;
       }
@@ -979,15 +1127,22 @@ export function openEventSheet(event) {
       // An end dragged behind the start is a mis-tap on the stepper; clamping
       // beats storing a negative duration.
       if (ended != null && ended < draft.started_at) ended = draft.started_at;
-      closeSheet();
-      await S.put("events", {
+      const patch = {
         id: event.id,
         started_at: draft.started_at,
         ended_at: ended,
         label_ids: JSON.stringify([...draft.labels]),
         note,
         quantity: draft.quantity,
-      });
+      };
+      // Closing a paused span drops the pause that was still open: it was
+      // never a gap in the middle, it was the end.
+      const live = liveEvent();
+      if (ended != null && S.pausedSince(live) !== null) {
+        patch.pauses = JSON.stringify(S.pausesOf(live).slice(0, -1));
+      }
+      closeSheet();
+      await S.put("events", patch);
       scheduleSync();
     }
   });
@@ -1310,9 +1465,13 @@ function eventPieces(event, now) {
     type,
     open,
     isMoment,
+    paused: S.isPaused(event),
     color: type?.color || "#8b91a1",
     stripe: labelStripe(event),
     finish: Math.max(open ? now : event.ended_at, event.started_at),
+    // The stretches it actually ran. A pause is drawn as a gap and counted
+    // nowhere, so the picture and the totals cannot disagree about it.
+    segments: isMoment ? [] : S.activeSegments(event, now),
   };
 }
 
@@ -1336,17 +1495,21 @@ function buildDays(events, now, dayLimit) {
       dayFor(event.started_at).ticks.push({ id: event.id, at: event.started_at, ...p });
       continue;
     }
-    let cursor = event.started_at;
-    for (let guard = 0; guard < 400; guard++) {
-      const { start, end } = dayBounds(cursor);
-      dayFor(cursor).spans.push({
-        id: event.id,
-        from: Math.max(event.started_at, start),
-        to: Math.min(p.finish, end),
-        ...p,
-      });
-      if (p.finish <= end) break;
-      cursor = end;
+    // One bar per running stretch, each cut at midnight, so a pause leaves a
+    // gap and a night still appears on both the days it covers.
+    for (const [segFrom, segTo] of p.segments) {
+      let cursor = segFrom;
+      for (let guard = 0; guard < 400; guard++) {
+        const { start, end } = dayBounds(cursor);
+        dayFor(cursor).spans.push({
+          id: event.id,
+          from: Math.max(segFrom, start),
+          to: Math.min(segTo, end),
+          ...p,
+        });
+        if (segTo <= end) break;
+        cursor = end;
+      }
     }
   }
 
@@ -1368,12 +1531,15 @@ function buildWindow(events, from, to, now) {
       continue;
     }
     if (p.finish < from || event.started_at > to) continue;
-    row.spans.push({
-      id: event.id,
-      from: Math.max(event.started_at, from),
-      to: Math.min(p.finish, to),
-      ...p,
-    });
+    for (const [segFrom, segTo] of p.segments) {
+      if (segTo < from || segFrom > to) continue;
+      row.spans.push({
+        id: event.id,
+        from: Math.max(segFrom, from),
+        to: Math.min(segTo, to),
+        ...p,
+      });
+    }
   }
   row.lanes = assignLanes(row.spans);
   return { rows: [row], hasOlder: false };
@@ -1412,9 +1578,13 @@ function trackHtml(row, now, { laneH = LANE_H, tickH = TICK_H, marks = null } = 
     .map((s) => {
       const left = pct(s.from);
       const w = Math.max(pct(s.to) - left, 0.7);
-      const title = `${s.type?.name || "Event"} ${clockTime(s.from)}–${s.open ? "now" : clockTime(s.to)}`;
+      // Only the piece that actually runs up to now is drawn as open. A span
+      // cut at midnight, or one interrupted by a pause, leaves earlier pieces
+      // that are finished and must not be hatched as if still growing.
+      const live = s.open && !s.paused && s.to >= s.finish;
+      const title = `${s.type?.name || "Event"} ${clockTime(s.from)}–${live ? "now" : clockTime(s.to)}`;
       const stripe = s.stripe ? `--stripe:linear-gradient(to right, ${s.stripe});` : "";
-      return `<button class="tl-span ${s.open ? "open" : ""} ${s.stripe ? "labelled" : ""}"
+      return `<button class="tl-span ${live ? "open" : ""} ${s.stripe ? "labelled" : ""}"
                       data-action="entry" data-id="${s.id}"
                       style="left:${left}%;width:${w}%;top:${s.lane * laneH}px;height:${laneH - 3}px;--tile:${esc(s.color)};${stripe}"
                       title="${esc(title)}" aria-label="${esc(title)}"></button>`;
@@ -1466,8 +1636,8 @@ function summaryHtml(events, from, to, now) {
     if (p.finish < from || event.started_at > to) continue;
     const entry = totals.get(p.type.id) || { type: p.type, count: 0, ms: 0 };
     entry.count += 1;
-    if (!p.isMoment) {
-      entry.ms += Math.min(p.finish, to) - Math.max(event.started_at, from);
+    for (const [segFrom, segTo] of p.segments) {
+      entry.ms += Math.max(0, Math.min(segTo, to) - Math.max(segFrom, from));
     }
     totals.set(p.type.id, entry);
   }
@@ -1580,21 +1750,24 @@ function computeStats(events, from, to, now) {
 
     if (p.isMoment) continue;
 
-    // Split the span across the days and hours it covers.
-    let cursor = Math.max(event.started_at, from);
-    const finish = Math.min(p.finish, to);
-    for (let guard = 0; guard < 800 && cursor < finish; guard++) {
-      const bounds = dayBounds(cursor);
-      const chunkEnd = Math.min(finish, bounds.end);
-      const ms = chunkEnd - cursor;
-      addMs(bounds.start, ms);
-      hours[new Date(cursor).getHours()].ms += ms;
-      totalMs += ms;
-      if (type) byType.get(type.id).ms += ms;
-      for (const id of S.labelIdsOf(event)) {
-        if (byLabel.has(id)) byLabel.get(id).ms += ms;
+    // Split each running stretch across the days and hours it covers. Paused
+    // time is simply time that reaches no bucket.
+    for (const [segFrom, segTo] of p.segments) {
+      let cursor = Math.max(segFrom, from);
+      const finish = Math.min(segTo, to);
+      for (let guard = 0; guard < 800 && cursor < finish; guard++) {
+        const bounds = dayBounds(cursor);
+        const chunkEnd = Math.min(finish, bounds.end);
+        const ms = chunkEnd - cursor;
+        addMs(bounds.start, ms);
+        hours[new Date(cursor).getHours()].ms += ms;
+        totalMs += ms;
+        if (type) byType.get(type.id).ms += ms;
+        for (const id of S.labelIdsOf(event)) {
+          if (byLabel.has(id)) byLabel.get(id).ms += ms;
+        }
+        cursor = chunkEnd;
       }
-      cursor = chunkEnd;
     }
   }
 
@@ -2143,6 +2316,10 @@ export function wire() {
       openEventSheet(S.state.events.get(id));
     } else if (action === "end-span") {
       await endSpan(S.state.events.get(id));
+    } else if (action === "pause-span") {
+      await pauseSpan(S.state.events.get(id));
+    } else if (action === "resume-span") {
+      await resumeSpan(S.state.events.get(id));
     }
   });
 

@@ -445,6 +445,99 @@ test("amounts are totalled per unit, never across them", async (browser, cookie)
   eq(errors, [], "javascript errors");
 });
 
+test("pausing a running span stops its clock, and resuming starts it again", async (browser, cookie) => {
+  await sync(BASE, cookie, project("p-pause", { types: [{ id: "t-pause", name: "Sleep", kind: "span" }] }));
+  const { page, errors } = await openApp(browser, BASE, { passcode: PASSCODE, select: "p-pause" });
+
+  await page.click(".tile[data-id='t-pause']");
+  await wait(1200);
+  ok(await page.$("[data-action='pause-span']"), "a running span offers no pause button");
+
+  await page.click("[data-action='pause-span']");
+  await wait(1200);
+
+  const held = (await liveEvents(BASE, cookie)).find((e) => e.type_id === "t-pause");
+  ok(held.ended_at === null, "pausing ended the span instead of holding it");
+  const pauses = JSON.parse(held.pauses || "[]");
+  eq(pauses.length, 1, "pauses recorded");
+  eq(pauses[0][1], null, "the pause should stay open until it is resumed");
+
+  // A frozen clock is the whole point: it must not keep counting.
+  const first = await page.$eval(".active-timer", (e) => e.textContent);
+  await wait(2200);
+  const second = await page.$eval(".active-timer", (e) => e.textContent);
+  eq(second, first, "the timer kept counting while paused");
+
+  const kind = await page.$eval(".tile[data-id='t-pause'] .tile-kind", (e) => e.textContent.trim());
+  eq(kind, "tap to resume", "the tile does not say what a tap now does");
+
+  await page.click("[data-action='resume-span']");
+  await wait(1200);
+  const resumed = (await liveEvents(BASE, cookie)).find((e) => e.type_id === "t-pause");
+  const closed = JSON.parse(resumed.pauses || "[]");
+  ok(closed[0][1] !== null, "resuming did not close the pause");
+  ok(closed[0][1] > closed[0][0], "the pause closed before it opened");
+  eq(errors, [], "javascript errors");
+});
+
+test("ending a paused span ends it where it was paused", async (browser, cookie) => {
+  const start = midnight - 20 * H;
+  const pausedAt = start + 1 * H;
+  await sync(BASE, cookie, {
+    ...project("p-endpause", { types: [{ id: "t-endpause", name: "Walk", kind: "span" }] }),
+    events: [{
+      id: "e-endpause", project_id: "p-endpause", type_id: "t-endpause",
+      started_at: start, ended_at: null, label_ids: [], note: "",
+      pauses: [[pausedAt, null]], deleted: 0, updated_at: 1,
+    }],
+  });
+  const { page, errors } = await openApp(browser, BASE, { passcode: PASSCODE, select: "p-endpause" });
+
+  await page.click("[data-action='end-span']");
+  await wait(1500);
+
+  const ev = (await liveEvents(BASE, cookie)).find((e) => e.id === "e-endpause");
+  ok(ev.ended_at !== null, "the span did not end");
+  // Ending at now would have credited it with every hour it spent paused.
+  eq(ev.ended_at, pausedAt, "ending a paused span invented the time it was paused for");
+  eq(JSON.parse(ev.pauses || "[]"), [], "the open pause outlived the span it ended");
+  eq(errors, [], "javascript errors");
+});
+
+test("a pause is a gap on the timeline and time the stats do not count", async (browser, cookie) => {
+  // Yesterday 04:00 to 08:00, paused 05:00 to 07:00. Ran for two hours of the
+  // four. Anchored to a whole day so it never straddles midnight.
+  const start = midnight - 20 * H;
+  await sync(BASE, cookie, {
+    ...project("p-gap", { types: [{ id: "t-gap", name: "Sleep", kind: "span" }] }),
+    events: [{
+      id: "e-gap", project_id: "p-gap", type_id: "t-gap",
+      started_at: start, ended_at: start + 4 * H, label_ids: [], note: "",
+      pauses: [[start + 1 * H, start + 3 * H]], deleted: 0, updated_at: 1,
+    }],
+  });
+  const { page, errors } = await openApp(browser, BASE, { passcode: PASSCODE, select: "p-gap" });
+
+  await page.click("#history-btn");
+  await wait(1400);
+  const bars = await page.$$eval(".tl-span[data-id='e-gap']", (els) =>
+    els.map((e) => ({ left: parseFloat(e.style.left), width: parseFloat(e.style.width) })));
+  eq(bars.length, 2, "a paused span was drawn as one unbroken bar");
+  ok(bars[1].left > bars[0].left + bars[0].width + 1,
+    `the two pieces are not separated by a gap: ${JSON.stringify(bars)}`);
+
+  await page.click("[data-view='stats']");
+  await wait(1200);
+  await page.click("[data-metric='time']");
+  await wait(1200);
+  const tiles = await page.$$eval(".stat", (els) =>
+    els.map((e) => e.textContent.trim().replace(/\s+/g, " ")));
+  ok(tiles.some((t) => t.includes("2h") && t.includes("total time")),
+    `paused time was counted as time spent: ${JSON.stringify(tiles)}`);
+  ok(!tiles.some((t) => t.includes("4h")), `the wall-clock span was counted: ${JSON.stringify(tiles)}`);
+  eq(errors, [], "javascript errors");
+});
+
 // ---------------------------------------------------------------------------
 
 const browser = await puppeteer.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"] });

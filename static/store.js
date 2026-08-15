@@ -248,6 +248,7 @@ export function createEvent(projectId, type, { startedAt, labelIds = [], note = 
     // The amount a tap records comes from the type's setup, so a tap always
     // records the same thing.
     quantity: quantity ?? (type.unit ? Number(type.default_quantity) || 0 : null),
+    pauses: "[]",
     deleted: 0,
   });
 }
@@ -259,7 +260,112 @@ export function amountText(type, value) {
   return `${rounded}${type.unit}`;
 }
 
+// ---------------------------------------------------------------------------
+// Pauses
+//
+// A span can stop and continue: a sleep interrupted, a walk waiting at a
+// crossing. The stretches it was not running are stored on the event itself as
+// JSON, `[[from, to], ...]`, with `to` null for a pause still in progress —
+// the same shape an open span uses, and the same reason label ids live in the
+// row: the merge is row by row, so a pause kept in a table of its own could
+// arrive without the event it belongs to.
+// ---------------------------------------------------------------------------
+
+export function pausesOf(event) {
+  try {
+    const parsed = JSON.parse(event?.pauses || "[]");
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((p) => Array.isArray(p) && typeof p[0] === "number");
+  } catch {
+    return [];
+  }
+}
+
+/** When the pause in progress began, or null when the event is running. */
+export function pausedSince(event) {
+  const pauses = pausesOf(event);
+  const last = pauses[pauses.length - 1];
+  return last && (last[1] === null || last[1] === undefined) ? last[0] : null;
+}
+
+export const isPaused = (event) => pausedSince(event) !== null;
+
+/**
+ * The stretches an event was actually running, as [from, to] pairs.
+ *
+ * One segment when nothing was paused, so the common case costs nothing.
+ * Everything that measures or draws a span goes through this, which is what
+ * keeps a pause from having to be subtracted in a dozen places.
+ */
+export function activeSegments(event, now = Date.now()) {
+  const finish = Math.max(event.ended_at === null ? now : event.ended_at, event.started_at);
+  const segments = [];
+  let cursor = event.started_at;
+  for (const [from, to] of pausesOf(event)) {
+    const start = Math.min(Math.max(from, cursor), finish);
+    if (start > cursor) segments.push([cursor, start]);
+    // An open pause runs to the end, so nothing after it counts.
+    if (to === null || to === undefined) return segments;
+    cursor = Math.min(Math.max(to, start), finish);
+  }
+  if (finish > cursor) segments.push([cursor, finish]);
+  return segments;
+}
+
+/** How long an event actually ran, with paused time taken out. */
+export function activeMs(event, now = Date.now()) {
+  let ms = 0;
+  for (const [from, to] of activeSegments(event, now)) ms += to - from;
+  return ms;
+}
+
+/** How long an event has spent paused. */
+export function pausedMs(event, now = Date.now()) {
+  const finish = Math.max(event.ended_at === null ? now : event.ended_at, event.started_at);
+  return Math.max(0, finish - event.started_at - activeMs(event, now));
+}
+
+/** Begin a pause. Recorded open, the same way a span is. */
+export function pauseEvent(event, at = Date.now()) {
+  if (!event || event.ended_at !== null || isPaused(event)) return null;
+  // A pause cannot begin before the event it belongs to.
+  const from = Math.max(at, event.started_at);
+  return put("events", { id: event.id, pauses: JSON.stringify([...pausesOf(event), [from, null]]) });
+}
+
+/** Close the pause in progress. */
+export function resumeEvent(event, at = Date.now()) {
+  const since = pausedSince(event);
+  if (since === null) return null;
+  const pauses = pausesOf(event);
+  pauses[pauses.length - 1] = [since, Math.max(at, since)];
+  return put("events", { id: event.id, pauses: JSON.stringify(pauses) });
+}
+
+/** Drop one recorded pause, so a mis-tap can be taken back later. */
+export function removePause(event, index) {
+  const pauses = pausesOf(event);
+  if (index < 0 || index >= pauses.length) return null;
+  pauses.splice(index, 1);
+  return put("events", { id: event.id, pauses: JSON.stringify(pauses) });
+}
+
+/**
+ * End a span.
+ *
+ * Ending while paused ends it where the pause began: no time has accrued
+ * since, so ending at `now` would invent a stretch that never happened. The
+ * open pause goes with it, because it was never a gap — it was the end.
+ */
 export function endEvent(event, endedAt) {
+  const since = pausedSince(event);
+  if (since !== null) {
+    return put("events", {
+      id: event.id,
+      ended_at: since,
+      pauses: JSON.stringify(pausesOf(event).slice(0, -1)),
+    });
+  }
   return put("events", { id: event.id, ended_at: endedAt ?? Date.now() });
 }
 
@@ -326,7 +432,10 @@ export async function repairOpenMoments() {
     const type = state.event_types.get(event.type_id);
     if (type && !type.deleted && type.kind !== "span") broken.push(event);
   }
-  for (const event of broken) await put("events", { id: event.id, ended_at: event.started_at });
+  // Pauses go too: a moment has no duration to interrupt.
+  for (const event of broken) {
+    await put("events", { id: event.id, ended_at: event.started_at, pauses: "[]" });
+  }
   return broken.length;
 }
 

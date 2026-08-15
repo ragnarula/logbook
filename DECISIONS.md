@@ -321,3 +321,29 @@ app does not know what a unit means, and a wrong total is worse than no total.
 
 **Invalidated if.** We teach the app about units and let it convert between
 them.
+
+---
+
+## 2026-08-15 — A span can be paused, and its pauses live in the event row
+
+**Problem.** A span recorded one unbroken stretch of time. A sleep interrupted
+for a feed, or a walk that waits at a crossing, was counted as if it never
+stopped, so every total included time that did not happen.
+
+**Decision.** A span can be paused and continued. The stretches it was not
+running are stored on the event itself as JSON, the same way an event stores its
+label identifiers. A pause is drawn as a gap on the timeline and counted in no
+total. Ending a paused span ends it where the pause began, because nothing has
+happened since.
+
+**Alternatives.** Two columns holding the total paused time and the current
+pause. Rejected because they do not record when the pauses were, so the timeline
+would draw one solid bar over time that did not happen, and the app already
+refuses to show a number it cannot stand behind. Rejected a separate table of
+pauses, because merging happens one row at a time. Rejected pausing by ending
+the span and starting another, because it turns one interrupted sleep into two
+entries and inflates every count.
+
+**Invalidated if.** A pause has to belong to something other than one event, or
+an event collects so many that the row becomes large.
+

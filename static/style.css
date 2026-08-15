@@ -189,9 +189,23 @@ ul { list-style: none; margin: 0; padding: 0; }
   border: 1px solid color-mix(in srgb, var(--tile) 40%, transparent);
 }
 .active-icon { font-size: 24px; }
-.active-main { flex: 1; min-width: 0; }
+/* The card body is the tap target for the entry itself, which leaves room for
+   pause and end beside it without a third button. */
+.active-main {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  background: none;
+  border: 0;
+  text-align: left;
+  color: inherit;
+}
 .active-name {
   font-weight: 600;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -203,6 +217,79 @@ ul { list-style: none; margin: 0; padding: 0; }
   letter-spacing: 0.02em;
   color: var(--tile);
 }
+
+/* --- Paused spans ------------------------------------------------------- */
+
+.active-flag {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+/* A paused card steps back: no colour wash, and the timer stops being the
+   bright thing on the screen, because it is no longer moving. */
+.active-card.paused {
+  background: var(--panel);
+  border-color: var(--border);
+}
+.active-card.paused .active-timer { color: var(--muted); }
+
+.pause-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 46px;
+  padding-left: 10px;
+  padding-right: 10px;
+}
+.pause-btn svg {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+/* The play triangle is a solid shape, not a stroked outline. */
+.pause-btn svg .solid { fill: currentColor; }
+
+/* A paused tile stops breathing — the animation is what says "in progress". */
+.tile.running.paused {
+  animation: none;
+  border-color: var(--border);
+  box-shadow: none;
+}
+.tile.running.paused .tile-kind { color: var(--muted); }
+
+.row-actions {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+/* Beats `.time-row .btn.big { width: 100% }`, which would otherwise push the
+   pause button off the row. */
+.time-row .row-actions .btn.big { flex: 1; width: auto; }
+
+.pause-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.pause-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 4px 6px 10px;
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+.pause-when { flex: 1; font-variant-numeric: tabular-nums; }
+.pause-len { color: var(--muted); font-variant-numeric: tabular-nums; }
 
 /* --- Tiles -------------------------------------------------------------- */
 

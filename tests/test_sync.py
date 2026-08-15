@@ -5,7 +5,10 @@ are last-write-wins on `updated_at` and the monotonic `seq` cursor. These test
 the cases that would silently corrupt a device's copy if they regressed.
 """
 
+import csv
 import importlib
+import io
+import json
 import sys
 from pathlib import Path
 
@@ -251,11 +254,73 @@ def test_a_database_from_before_quantity_gains_the_columns(tmp_path, monkeypatch
 
     conn = main.connect(db_path)
     columns = {r[1] for r in conn.execute("PRAGMA table_info(events)")}
-    assert "quantity" in columns
+    assert {"quantity", "pauses"} <= columns
     type_columns = {r[1] for r in conn.execute("PRAGMA table_info(event_types)")}
     assert {"unit", "step", "default_quantity"} <= type_columns
 
     # The rows that were already there survive, with empty amounts.
     row = conn.execute("SELECT * FROM events WHERE id = 'e1'").fetchone()
     assert row["quantity"] is None
+    assert row["pauses"] == "[]", "an existing event should read as never paused"
     assert conn.execute("SELECT COUNT(*) FROM event_types").fetchone()[0] == 1
+
+
+def test_pauses_accept_a_list_or_an_encoded_string(client):
+    """Same contract as label_ids: the server stores the document, never reads it."""
+    push(client, events=[
+        {"id": "e1", "project_id": "p1", "type_id": "t1", "started_at": 0,
+         "pauses": [[100, 200], [300, None]], "updated_at": 1},
+        {"id": "e2", "project_id": "p1", "type_id": "t1", "started_at": 0,
+         "pauses": "[[400, 500]]", "updated_at": 1},
+        {"id": "e3", "project_id": "p1", "type_id": "t1", "started_at": 0, "updated_at": 1},
+    ])
+    events = {e["id"]: e["pauses"] for e in push(client, since=0)["changes"]["events"]}
+    assert json.loads(events["e1"]) == [[100, 200], [300, None]]
+    assert json.loads(events["e2"]) == [[400, 500]]
+    assert events["e3"] == "[]", "an event with no pauses should default, not go null"
+
+
+def test_export_reports_paused_and_active_time(client):
+    """A span paused for 15 of its 60 minutes ran for 45."""
+    push(
+        client,
+        projects=[project("p2", "Naps", 1)],
+        event_types=[{"id": "t2", "project_id": "p2", "name": "Nap", "kind": "span", "updated_at": 1}],
+        events=[{"id": "e1", "project_id": "p2", "type_id": "t2", "started_at": 0,
+                 "ended_at": 3_600_000, "pauses": [[600_000, 1_500_000]], "updated_at": 1}],
+    )
+    rows = list(csv.DictReader(io.StringIO(client.get("/api/export", params={"project": "p2"}).text)))
+    assert rows[0]["duration_seconds"] == "3600", "wall-clock duration should be unchanged"
+    assert rows[0]["paused_seconds"] == "900"
+    assert rows[0]["active_seconds"] == "2700"
+
+
+def test_export_survives_a_malformed_pauses_value(client):
+    """A wrong number is worse than a missing one, so junk counts as no pause."""
+    push(
+        client,
+        projects=[project("p3", "Junk", 1)],
+        event_types=[{"id": "t3", "project_id": "p3", "name": "Walk", "kind": "span", "updated_at": 1}],
+        events=[{"id": "e1", "project_id": "p3", "type_id": "t3", "started_at": 0,
+                 "ended_at": 60_000, "pauses": "not json at all", "updated_at": 1}],
+    )
+    rows = list(csv.DictReader(io.StringIO(client.get("/api/export", params={"project": "p3"}).text)))
+    assert rows[0]["paused_seconds"] == "0"
+    assert rows[0]["active_seconds"] == "60"
+
+
+def test_the_widget_reports_a_paused_span(client):
+    push(
+        client,
+        projects=[project("p4", "Widget", 1)],
+        event_types=[{"id": "t4", "project_id": "p4", "name": "Sleep", "kind": "span", "updated_at": 1}],
+        events=[
+            {"id": "running", "project_id": "p4", "type_id": "t4", "started_at": 0,
+             "ended_at": None, "updated_at": 1},
+            {"id": "held", "project_id": "p4", "type_id": "t4", "started_at": 0,
+             "ended_at": None, "pauses": [[900, None]], "updated_at": 1},
+        ],
+    )
+    active = {a["id"]: a["paused_at"] for a in client.get("/api/widget", params={"project": "p4"}).json()["active"]}
+    assert active["running"] is None
+    assert active["held"] == 900, "a paused span should say when it was paused"

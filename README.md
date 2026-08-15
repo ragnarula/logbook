@@ -80,6 +80,10 @@ device that cannot reach the server still saves entries and sends them later.
 - **Event types.** The user names a type once, then reuses it by tapping a tile.
 - **Two kinds of event.** A moment happens at one time. A span starts, then ends
   later.
+- **Pausing.** A running span can be paused and continued. Paused time is drawn
+  as a gap on the timeline and left out of every total, so a sleep interrupted
+  for a feed is still one entry rather than two. Ending it while paused ends it
+  where the pause began.
 - **Labels.** The user names a label once, then selects it.
 - **Amounts.** An event type can carry a unit, a step size and the amount a tap
   records, for example 120ml of milk. Events without a unit are unaffected. The
@@ -113,8 +117,8 @@ device that cannot reach the server still saves entries and sends them later.
   offers an undo.
 - **Home Screen widget.** The app generates a script for Scriptable. The widget
   lists the spans that are running and the time each one started. The user taps
-  a row to end that span. iOS cannot show a live counter in a widget, so the
-  widget shows start times instead.
+  a row to end that span, or to continue it when it is paused. iOS cannot show a
+  live counter in a widget, so the widget shows start times instead.
 
 ## Design principles
 
